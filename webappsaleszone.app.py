@@ -367,6 +367,7 @@ def show_brand_analytics():
     brand_file = st.file_uploader("Carica il file Brand Analytics (CSV/XLSX)", type=["csv", "xlsx"])
 
     def norm(s: str) -> str:
+        """Funzione norm esatta dal Codice Madre"""
         return (str(s).strip().lower()
             .replace("%", "").replace(":", "").replace("(", "").replace(")", "")
             .replace("/", " ").replace("-", " ").replace("  ", " ").replace(" ", "_"))
@@ -391,17 +392,17 @@ def show_brand_analytics():
                 if n in col_index: return col_index[n]
             return None
 
-        # Risoluzione colonne
-        c_query = pick(idx, "Query di ricerca", "search_query", "Termine di ricerca")
-        c_volume = pick(idx, "Volume query di ricerca", "search_query_volume", "Volume di ricerca")
-        c_imp_tot = pick(idx, "Impressioni: conteggio totale", "search_funnel_impressions_total", "Impressioni totali")
-        c_imp_asin = pick(idx, "Impressioni: numero ASIN", "impressioni_numero_asin", "Impressioni ASIN", "impressioni_conteggio_marchio")
-        c_clk_tot = pick(idx, "Clic: conteggio totale", "search_funnel_clicks_total", "Clic totali")
-        c_clk_asin = pick(idx, "Clic: numero di ASIN", "clic_numero_asin", "Clic ASIN", "clic_conteggio_marchio")
-        c_add_tot = pick(idx, "Aggiunte al carrello: conteggio totale", "search_funnel_add_to_carts_total")
-        c_add_asin = pick(idx, "Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count", "aggiunte_al_carrello_conteggio_marchio")
-        c_buy_tot = pick(idx, "Acquisti: conteggio totale", "search_funnel_purchases_total")
-        c_buy_asin = pick(idx, "Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count", "acquisti_conteggio_marchio")
+        # Risoluzione colonne esatta come Codice Madre
+        c_query = pick(idx, "Query di ricerca", "search_query", "Termine di ricerca", "query_di_ricerca")
+        c_volume = pick(idx, "Volume query di ricerca", "search_query_volume", "Volume di ricerca", "volume_query_di_ricerca")
+        c_imp_tot = pick(idx, "Impressioni: conteggio totale", "search_funnel_impressions_total", "Impressioni totali", "impressioni_conteggio_totale")
+        c_imp_asin = pick(idx, "Impressioni: numero ASIN", "impressioni_numero_asin", "Impressioni ASIN", "impressioni_conteggio_marchio", "impressioni_conteggio_asin")
+        c_clk_tot = pick(idx, "Clic: conteggio totale", "search_funnel_clicks_total", "Clic totali", "clic_conteggio_totale")
+        c_clk_asin = pick(idx, "Clic: numero di ASIN", "clic_numero_asin", "Clic ASIN", "clic_conteggio_marchio", "clic_numero_di_asin")
+        c_add_tot = pick(idx, "Aggiunte al carrello: conteggio totale", "search_funnel_add_to_carts_total", "aggiunte_al_carrello_conteggio_totale")
+        c_add_asin = pick(idx, "Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count", "aggiunte_al_carrello_conteggio_marchio", "aggiunte_al_carrello_numero_asin")
+        c_buy_tot = pick(idx, "Acquisti: conteggio totale", "search_funnel_purchases_total", "acquisti_conteggio_totale")
+        c_buy_asin = pick(idx, "Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count", "acquisti_conteggio_marchio", "acquisti_numero_asin")
 
         if not c_query:
             st.error("Colonna 'Query di ricerca' non trovata. Verifica che il file non sia corrotto o di formato diverso.")
@@ -452,7 +453,7 @@ def show_brand_analytics():
         c2.metric("Impression Share Media", f"{out['Impression Share Asin'].mean()*100:.2f}%")
         c3.metric("CTR Asin Medio", f"{out['CTR Asin'].mean()*100:.2f}%")
 
-# --- SQP ---
+# --- SQP (FUNZIONE CORRETTA CON CR MARKET E MARCHIO) ---
 def show_sqp():
     st.title("🔎 SQP – Search Query Performance")
     sqp_file = st.file_uploader("Carica il file Search Query Performance (.csv)", type=["csv"])
@@ -462,7 +463,11 @@ def show_sqp():
         if df_sqp is None: return
         df_sqp = clean_columns(df_sqp)
 
-        def norm_col(s): return str(s).strip().lower().replace("%","").replace(":","").replace(" ","_")
+        def norm_col(s): 
+            return (str(s).strip().lower()
+                .replace("%","").replace(":","").replace("(","").replace(")","")
+                .replace("/","").replace("-","").replace("  "," ").replace(" ","_"))
+        
         col_index = {norm_col(c): c for c in df_sqp.columns}
         
         def pick(*aliases):
@@ -471,38 +476,67 @@ def show_sqp():
                 if key in col_index: return col_index[key]
             return None
 
-        # Mappatura
-        col_query = pick("Query di ricerca", "search_query", "search_term")
-        col_imp_tot = pick("Impressioni_conteggio_totale", "impressions_total", "search_funnel_impressions_total")
-        col_imp_brand = pick("Impressioni_conteggio_marchio", "impressions_brand", "search_funnel_impressions_brand")
-        col_clk_tot = pick("Clic_conteggio_totale", "clicks_total", "search_funnel_clicks_total")
-        col_clk_brand = pick("Clic_conteggio_marchio", "clicks_brand", "search_funnel_clicks_brand")
-        col_buy_tot = pick("Acquisti_conteggio_totale", "purchases_total", "search_funnel_purchases_total")
-        col_buy_brand = pick("Acquisti_conteggio_marchio", "purchases_brand", "search_funnel_purchases_brand")
+        # Mappatura Esatta Codice Madre
+        col_query = pick(
+            "Query di ricerca", "search_query", "search_term", "Termine ricerca cliente"
+        )
+        col_imp_tot = pick(
+            "Impressioni: conteggio totale", "search_funnel_impressions_total", 
+            "Impressioni conteggio totale", "Impressions total"
+        )
+        col_imp_brand = pick(
+            "Impressioni: conteggio marchio", "search_funnel_impressions_brand", 
+            "Impressions brand", "Impressioni conteggio marchio"
+        )
+        col_clk_tot = pick(
+            "Clic: conteggio totale", "search_funnel_clicks_total", 
+            "Clicks total", "Clic conteggio totale"
+        )
+        col_clk_brand = pick(
+            "Clic: conteggio marchio", "search_funnel_clicks_brand", 
+            "Clicks brand", "Clic conteggio marchio"
+        )
+        col_buy_tot = pick(
+            "Acquisti: conteggio totale", "search_funnel_purchases_total", 
+            "Purchases total", "Acquisti conteggio totale"
+        )
+        col_buy_brand = pick(
+            "Acquisti: conteggio marchio", "search_funnel_purchases_brand", 
+            "Purchases brand", "Acquisti conteggio marchio"
+        )
 
         if not col_query:
-            st.error("Colonne non trovate. Assicurati che sia il file SQP standard.")
-            st.write("Colonne nel file:", list(df_sqp.columns))
+            st.error("Colonne minime non trovate. Verifica il file.")
+            with st.expander("Colonne rilevate nel file"):
+                st.write(list(df_sqp.columns))
             return
 
         # Calcoli
-        for c in [col_imp_tot, col_imp_brand, col_clk_tot, col_clk_brand, col_buy_tot, col_buy_brand]:
+        num_cols = [col_imp_tot, col_imp_brand, col_clk_tot, col_clk_brand, col_buy_tot, col_buy_brand]
+        for c in num_cols:
             if c: df_sqp[c] = pd.to_numeric(df_sqp[c], errors='coerce').fillna(0)
 
-        df_sqp["CTR MARKET"] = df_sqp[col_clk_tot] / df_sqp[col_imp_tot].replace(0, 1)
-        df_sqp["CTR MARCHIO"] = df_sqp[col_clk_brand] / df_sqp[col_imp_brand].replace(0, 1)
-        df_sqp["CR MARKET"] = df_sqp[col_buy_tot] / df_sqp[col_clk_tot].replace(0, 1)
+        # Formule Esatte Codice Madre
+        if col_imp_tot and col_clk_tot:
+            df_sqp["CTR MARKET"] = df_sqp[col_clk_tot] / df_sqp[col_imp_tot].replace(0, 1)
+        if col_imp_brand and col_clk_brand:
+            df_sqp["CTR MARCHIO"] = df_sqp[col_clk_brand] / df_sqp[col_imp_brand].replace(0, 1)
+        if col_clk_tot and col_buy_tot:
+            df_sqp["CR MARKET"] = df_sqp[col_buy_tot] / df_sqp[col_clk_tot].replace(0, 1)
+        if col_clk_brand and col_buy_brand:
+            df_sqp["CR MARCHIO"] = df_sqp[col_buy_brand] / df_sqp[col_clk_brand].replace(0, 1)
         
         st.subheader("📌 KPI di Sintesi")
-        tot_imp = df_sqp[col_imp_tot].sum()
-        tot_clk = df_sqp[col_clk_tot].sum()
-        ctr_tot = (tot_clk / tot_imp * 100) if tot_imp > 0 else 0
+        if col_imp_tot:
+            tot_imp = df_sqp[col_imp_tot].sum()
+            st.metric("Impressioni Totali", f"{int(tot_imp):,}")
         
-        c1, c2 = st.columns(2)
-        c1.metric("Impressioni Totali", f"{int(tot_imp):,}")
-        c2.metric("CTR Medio Market", f"{ctr_tot:.2f}%")
+        if col_clk_tot and col_imp_tot:
+            tot_clk = df_sqp[col_clk_tot].sum()
+            ctr_tot = (tot_clk / tot_imp * 100) if tot_imp > 0 else 0
+            st.metric("CTR Medio Market", f"{ctr_tot:.2f}%")
 
-        st.subheader("🔍 Anteprima Dati")
+        st.subheader("🔍 Anteprima Dati (con CR MARKET e MARCHIO)")
         st.dataframe(df_sqp.head(50), use_container_width=True)
 
         buffer = BytesIO()
