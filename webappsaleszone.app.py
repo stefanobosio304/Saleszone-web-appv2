@@ -6,6 +6,7 @@ import re
 import unicodedata
 from io import BytesIO
 import os
+import base64
 
 # ==============================================================================
 # 1. CONFIGURAZIONE PAGINA (PRIMA ISTRUZIONE OBBLIGATORIA)
@@ -60,6 +61,16 @@ def inject_custom_css():
         [data-testid="stMetricLabel"] {
             color: #2940A8 !important;
         }
+        /* Logo Sidebar */
+        .sidebar-logo-text {
+            font-size: 28px;
+            font-weight: 800;
+            color: #2940A8;
+            margin-bottom: 20px;
+        }
+        .sidebar-logo-text span {
+            color: #FA7838;
+        }
         /* Tabelle */
         [data-testid="stDataFrame"] {
             border: 1px solid #DBDBDB;
@@ -76,8 +87,14 @@ def inject_custom_css():
 inject_custom_css()
 
 # ==============================================================================
-# 3. UTILITIES GLOBALI (CARICAMENTO ROBUSTO)
+# 3. UTILITIES GLOBALI (CARICAMENTO ROBUSTO & IMMAGINI)
 # ==============================================================================
+def get_img_as_base64(file):
+    """Converte immagine locale in base64 per HTML."""
+    with open(file, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
 def load_data_robust(file):
     """
     Funzione avanzata per leggere CSV/Excel.
@@ -152,9 +169,10 @@ def clean_columns(df):
 def show_home():
     col1, col2 = st.columns([1, 2])
     with col1:
-        # MODIFICA: Carica logo immagine se presente, altrimenti fallback testuale
+        # Se c'è il logo, lo mostriamo anche qui, altrimenti fallback CSS
         if os.path.exists("logo.png"):
-            st.image("logo.png", use_container_width=True)
+            # Usiamo st.image qui perché nel main content non ci sono problemi di margini stretti
+            st.image("logo.png", width=300)
         else:
             st.markdown("""
             <div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'>
@@ -729,14 +747,19 @@ def show_funnel_audit():
 # ==============================================================================
 def main():
     with st.sidebar:
-        # MODIFICA: Carica logo immagine se presente, altrimenti fallback testuale
+        # LOGO HTML CON BASE64 per evitare tagli
         if os.path.exists("logo.png"):
-            st.image("logo.png", use_container_width=True)
+            # Legge e converte immagine in base64 per HTML img tag (più sicuro di st.image per margini)
+            img_b64 = get_img_as_base64("logo.png")
+            st.markdown(
+                f'<img src="data:image/png;base64,{img_b64}" style="max-width:100%; height:auto; margin-bottom:20px;">',
+                unsafe_allow_html=True,
+            )
         else:
             st.markdown("""
-            <div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'>
-                <h1 style='color: white !important; margin: 0; font-size: 60px;'>S<span style='color: #FA7838;'>Z</span></h1>
-                <p style='color: white; margin: 10px 0 0 0; font-size: 14px; letter-spacing: 4px; font-weight: 600;'>SALESZONE</p>
+            <div style='background-color: #2940A8; padding: 20px; border-radius: 10px; text-align: center; margin-bottom: 20px;'>
+                <h1 style='color: white !important; margin: 0; font-size: 40px;'>S<span style='color: #FA7838;'>Z</span></h1>
+                <p style='color: white; margin: 5px 0 0 0; font-size: 10px; letter-spacing: 2px; font-weight: 600;'>SALESZONE</p>
             </div>
             """, unsafe_allow_html=True)
         
