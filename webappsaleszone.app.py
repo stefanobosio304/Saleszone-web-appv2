@@ -781,15 +781,3 @@ def main():
 if __name__ == "__main__":
     main()
 ```
-
-### 2. Come impostare la chiave permanente (Streamlit Secrets)
-
-Per non dover inserire la chiave API ogni volta, segui questi passaggi su **Streamlit Cloud**:
-
-1.  Vai alla Dashboard della tua App su [share.streamlit.io](https://share.streamlit.io).
-2.  Clicca sui tre puntini (`⋮`) accanto alla tua app e seleziona **"Settings"**.
-3.  Clicca sulla scheda **"Secrets"**.
-4.  Nel box di testo che appare, scrivi questo:
-
-```toml
-GEMINI_API_KEY = "incolla-qui-la-tua-chiave-api-che-hai-preso-da-google"
