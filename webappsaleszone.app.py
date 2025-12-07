@@ -5,6 +5,7 @@ import io
 import re
 import unicodedata
 from io import BytesIO
+import os
 
 # ==============================================================================
 # 1. CONFIGURAZIONE PAGINA (PRIMA ISTRUZIONE OBBLIGATORIA)
@@ -58,16 +59,6 @@ def inject_custom_css():
         }
         [data-testid="stMetricLabel"] {
             color: #2940A8 !important;
-        }
-        /* Logo Sidebar */
-        .sidebar-logo {
-            font-size: 28px;
-            font-weight: 800;
-            color: #2940A8;
-            margin-bottom: 20px;
-        }
-        .sidebar-logo span {
-            color: #FA7838;
         }
         /* Tabelle */
         [data-testid="stDataFrame"] {
@@ -161,12 +152,17 @@ def clean_columns(df):
 def show_home():
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.markdown("""
-        <div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'>
-            <h1 style='color: white !important; margin: 0; font-size: 60px;'>S<span style='color: #FA7838;'>Z</span></h1>
-            <p style='color: white; margin: 10px 0 0 0; font-size: 14px; letter-spacing: 4px; font-weight: 600;'>SALESZONE</p>
-        </div>
-        """, unsafe_allow_html=True)
+        # MODIFICA: Carica logo immagine se presente, altrimenti fallback testuale
+        if os.path.exists("logo.png"):
+            st.image("logo.png", use_container_width=True)
+        else:
+            st.markdown("""
+            <div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'>
+                <h1 style='color: white !important; margin: 0; font-size: 60px;'>S<span style='color: #FA7838;'>Z</span></h1>
+                <p style='color: white; margin: 10px 0 0 0; font-size: 14px; letter-spacing: 4px; font-weight: 600;'>SALESZONE</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
     with col2:
         st.title("Benvenuto in Saleszone")
         st.markdown("### Il tuo spazio di crescita su Amazon.")
@@ -733,7 +729,16 @@ def show_funnel_audit():
 # ==============================================================================
 def main():
     with st.sidebar:
-        st.markdown("<div class='sidebar-logo'>S<span>Z</span> SALESZONE</div>", unsafe_allow_html=True)
+        # MODIFICA: Carica logo immagine se presente, altrimenti fallback testuale
+        if os.path.exists("logo.png"):
+            st.image("logo.png", use_container_width=True)
+        else:
+            st.markdown("""
+            <div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'>
+                <h1 style='color: white !important; margin: 0; font-size: 60px;'>S<span style='color: #FA7838;'>Z</span></h1>
+                <p style='color: white; margin: 10px 0 0 0; font-size: 14px; letter-spacing: 4px; font-weight: 600;'>SALESZONE</p>
+            </div>
+            """, unsafe_allow_html=True)
         
         MENU_VOCI = [
             "Home",
