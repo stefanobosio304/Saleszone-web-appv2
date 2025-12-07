@@ -89,8 +89,9 @@ inject_custom_css()
 # ==============================================================================
 def load_data_robust(file):
     """
-    Funzione avanzata per leggere CSV/Excel tentando diversi encoding e separatori.
-    Risolve il problema dei dati mancanti o errori di lettura.
+    Funzione avanzata per leggere CSV/Excel.
+    Rileva automaticamente se il file ha una riga di metadata iniziale (comune nei report Amazon)
+    e la salta per leggere correttamente le intestazioni.
     """
     if file is None: return None
     
@@ -102,34 +103,44 @@ def load_data_robust(file):
             st.error(f"Errore lettura Excel: {e}")
             return None
 
-    # 2. Gestione CSV (Tentativi multipli)
+    # 2. Gestione CSV (Analisi intelligente della prima riga)
     if file.name.endswith('.csv'):
-        # Tenta lettura standard
         try:
+            # Legge la prima riga per capire se è un'intestazione spuria (es. "Marchio=...")
+            content = file.getvalue().decode('utf-8', errors='ignore')
+            first_line = content.split('\n')[0]
+            
+            skip_rows = 0
+            if "Marchio=" in first_line or "Periodo interessato=" in first_line:
+                skip_rows = 1
+            
             file.seek(0)
-            df = pd.read_csv(file, encoding='utf-8')
-            if df.shape[1] > 1: return df
-        except: pass
-        
-        # Tenta separatore ;
-        try:
+            
+            # Tenta lettura standard utf-8
+            try:
+                df = pd.read_csv(file, encoding='utf-8', skiprows=skip_rows)
+                if df.shape[1] > 1: return df
+            except: pass
+            
+            # Tenta separatore ;
             file.seek(0)
-            df = pd.read_csv(file, sep=';', encoding='utf-8')
-            if df.shape[1] > 1: return df
-        except: pass
-        
-        # Tenta encoding latin1 (comune in Italia)
-        try:
+            try:
+                df = pd.read_csv(file, sep=';', encoding='utf-8', skiprows=skip_rows)
+                if df.shape[1] > 1: return df
+            except: pass
+            
+            # Tenta encoding latin1
             file.seek(0)
-            df = pd.read_csv(file, sep=';', encoding='latin1')
-            if df.shape[1] > 1: return df
-        except: pass
-        
-        # Ultimo tentativo con virgola e latin1
-        try:
+            try:
+                df = pd.read_csv(file, sep=';', encoding='latin1', skiprows=skip_rows)
+                if df.shape[1] > 1: return df
+            except: pass
+            
+            # Ultimo tentativo
             file.seek(0)
-            df = pd.read_csv(file, encoding='latin1')
+            df = pd.read_csv(file, encoding='latin1', skiprows=skip_rows)
             return df
+
         except Exception as e:
             st.error(f"Impossibile leggere il file CSV. Errore: {e}")
             return None
@@ -143,7 +154,7 @@ def clean_columns(df):
     return df
 
 # ==============================================================================
-# 4. MODULI APPLICAZIONE (LOGICA MADRE ORIGINALE)
+# 4. MODULI APPLICAZIONE
 # ==============================================================================
 
 # --- HOME ---
@@ -173,7 +184,7 @@ def show_home():
     with c3:
         st.warning("🤝 **Metodo**\n\nNessun intermediario, solo risultati concreti e misurabili.")
 
-# --- PPC OPTIMIZER (CODICE MADRE COMPLETO) ---
+# --- PPC OPTIMIZER ---
 def show_ppc_optimizer():
     st.title("📊 Saleszone Ads Optimizer")
     st.write("Carica i report Amazon PPC, analizza KPI e genera suggerimenti intelligenti.")
@@ -197,7 +208,7 @@ def show_ppc_optimizer():
         if df is None: return
         df = clean_columns(df)
 
-        # Mapping colonne (Codice Madre)
+        # Mapping colonne
         mapping = {
             'Nome portafoglio': 'Portfolio', 'Portfolio name': 'Portfolio',
             'Nome campagna': 'Campaign', 'Campaign Name': 'Campaign',
@@ -217,7 +228,6 @@ def show_ppc_optimizer():
             if col not in df.columns:
                 df[col] = 0
             else:
-                # Conversione sicura
                 if df[col].dtype == object:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
                 else:
@@ -269,7 +279,7 @@ def show_ppc_optimizer():
             'Spend': '€{:.2f}', 'Sales': '€{:.2f}', 'CPC': '€{:.2f}', 'CTR': '{:.2f}%', 'CR': '{:.2f}%', 'ACOS': lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A"
         }), use_container_width=True)
 
-        # PANORAMICA CAMPAGNE con filtro
+        # PANORAMICA CAMPAGNE
         st.subheader("📊 Panoramica per Campagna")
         portfolio_options = ["Tutti"] + sorted(df['Portfolio'].unique().tolist())
         selected_portfolio_for_campaign = st.selectbox("Filtra per Portafoglio", portfolio_options, key="portfolio_campaign")
@@ -308,7 +318,6 @@ def show_ppc_optimizer():
 
         if not df_filtered_terms.empty:
             cols_to_show = ['Search Term', 'Keyword', 'Campaign', 'Impressions', 'Clicks', 'Spend', 'Sales', 'Orders', 'CPC', 'CTR', 'CR', 'ACOS']
-            # Filtra solo colonne che esistono
             cols_to_show = [c for c in cols_to_show if c in df_filtered_terms.columns]
             st.dataframe(df_filtered_terms[cols_to_show].head(100).style.format({
                 'Spend': '€{:.2f}', 'Sales': '€{:.2f}', 'CPC': '€{:.2f}', 'CTR': '{:.2f}%', 'CR': '{:.2f}%', 'ACOS': lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A"
@@ -352,7 +361,7 @@ def show_ppc_optimizer():
                 acos_display = f"{row['ACOS']:.2f}%" if pd.notna(row['ACOS']) else "N/A"
                 st.error(f"{row['Campaign']} (Spesa: €{row['Spend']:.2f}, ACOS: {acos_display})")
 
-# --- BRAND ANALYTICS (CODICE MADRE COMPLETO) ---
+# --- BRAND ANALYTICS ---
 def show_brand_analytics():
     st.title("📈 Brand Analytics Insights")
     brand_file = st.file_uploader("Carica il file Brand Analytics (CSV/XLSX)", type=["csv", "xlsx"])
@@ -386,16 +395,17 @@ def show_brand_analytics():
         c_query = pick(idx, "Query di ricerca", "search_query", "Termine di ricerca")
         c_volume = pick(idx, "Volume query di ricerca", "search_query_volume", "Volume di ricerca")
         c_imp_tot = pick(idx, "Impressioni: conteggio totale", "search_funnel_impressions_total", "Impressioni totali")
-        c_imp_asin = pick(idx, "Impressioni: numero ASIN", "impressioni_numero_asin", "Impressioni ASIN")
+        c_imp_asin = pick(idx, "Impressioni: numero ASIN", "impressioni_numero_asin", "Impressioni ASIN", "impressioni_conteggio_marchio")
         c_clk_tot = pick(idx, "Clic: conteggio totale", "search_funnel_clicks_total", "Clic totali")
-        c_clk_asin = pick(idx, "Clic: numero di ASIN", "clic_numero_asin", "Clic ASIN")
+        c_clk_asin = pick(idx, "Clic: numero di ASIN", "clic_numero_asin", "Clic ASIN", "clic_conteggio_marchio")
         c_add_tot = pick(idx, "Aggiunte al carrello: conteggio totale", "search_funnel_add_to_carts_total")
-        c_add_asin = pick(idx, "Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count")
+        c_add_asin = pick(idx, "Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count", "aggiunte_al_carrello_conteggio_marchio")
         c_buy_tot = pick(idx, "Acquisti: conteggio totale", "search_funnel_purchases_total")
-        c_buy_asin = pick(idx, "Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count")
+        c_buy_asin = pick(idx, "Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count", "acquisti_conteggio_marchio")
 
         if not c_query:
-            st.error("Colonna 'Query di ricerca' non trovata. Verifica il file.")
+            st.error("Colonna 'Query di ricerca' non trovata. Verifica che il file non sia corrotto o di formato diverso.")
+            st.write("Colonne trovate:", list(df_raw.columns))
             return
 
         base = pd.DataFrame()
@@ -442,7 +452,7 @@ def show_brand_analytics():
         c2.metric("Impression Share Media", f"{out['Impression Share Asin'].mean()*100:.2f}%")
         c3.metric("CTR Asin Medio", f"{out['CTR Asin'].mean()*100:.2f}%")
 
-# --- SQP (CODICE MADRE COMPLETO) ---
+# --- SQP ---
 def show_sqp():
     st.title("🔎 SQP – Search Query Performance")
     sqp_file = st.file_uploader("Carica il file Search Query Performance (.csv)", type=["csv"])
@@ -500,7 +510,7 @@ def show_sqp():
             df_sqp.to_excel(writer, index=False)
         st.download_button("Scarica SQP Elaborato", buffer.getvalue(), "sqp_analysis.xlsx")
 
-# --- GENERAZIONE CORRISPETTIVI (CODICE MADRE COMPLETO) ---
+# --- GENERAZIONE CORRISPETTIVI ---
 def show_invoices():
     st.title("📄 Generazione Corrispettivi Mensili")
     file = st.file_uploader("Carica il report Transazioni con IVA (.csv)", type=["csv"])
@@ -520,7 +530,6 @@ def show_invoices():
             if 'DATE' in c.upper() and 'COMPLETE' in c.upper(): date_col = c; break
         
         if not date_col:
-            # Fallback
             possible = [c for c in df_corr.columns if 'date' in c.lower() or 'data' in c.lower()]
             if possible: date_col = possible[0]
         
@@ -529,20 +538,17 @@ def show_invoices():
             df_corr = df_corr.dropna(subset=[date_col])
             df_corr = df_corr.sort_values(date_col)
             
-            # Colonne Importi
             cols_amt = {
                 'Netto': [c for c in df_corr.columns if 'VALUE_AMT_VAT_EXCL' in c],
                 'IVA': [c for c in df_corr.columns if 'VAT_AMT' in c and 'VALUE' in c],
                 'Lordo': [c for c in df_corr.columns if 'VALUE_AMT_VAT_INCL' in c]
             }
             
-            # Se le colonne standard Amazon non ci sono, cerca alternative
             col_netto = cols_amt['Netto'][0] if cols_amt['Netto'] else None
             col_iva = cols_amt['IVA'][0] if cols_amt['IVA'] else None
             col_lordo = cols_amt['Lordo'][0] if cols_amt['Lordo'] else None
 
             if col_netto and col_iva and col_lordo:
-                # Pulizia numeri
                 for c in [col_netto, col_iva, col_lordo]:
                     if df_corr[c].dtype == object:
                         df_corr[c] = pd.to_numeric(df_corr[c].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
@@ -573,7 +579,7 @@ def show_invoices():
         else:
             st.error("Colonna Data non trovata.")
 
-# --- INVENTARIO FBA (CODICE MADRE COMPLETO) ---
+# --- INVENTARIO FBA ---
 def show_inventory():
     st.title("📦 Controllo Inventario FBA")
     st.write("Identifica anomalie, KPI e genera report per reclami Amazon.")
@@ -610,12 +616,11 @@ def show_inventory():
 
         # Logica Anomalia (Delta)
         if 'ending warehouse balance' in df_inv.columns:
-            # Calcolo semplificato Ending Teorico per evitare crash su colonne mancanti
             cols_inc = [c for c in ['receipts', 'customer returns', 'found'] if c in df_inv.columns]
             cols_dec = [c for c in ['customer shipments', 'lost', 'damaged', 'disposed'] if c in df_inv.columns]
             
             df_inv['inc'] = df_inv[cols_inc].sum(axis=1)
-            df_inv['dec'] = df_inv[cols_dec].sum(axis=1).abs() # Assicura positivo per sottrazione
+            df_inv['dec'] = df_inv[cols_dec].sum(axis=1).abs()
             
             df_inv['ending_teorico'] = df_inv.get('starting warehouse balance', 0) + df_inv['inc'] - df_inv['dec']
             df_inv['delta'] = df_inv['ending warehouse balance'] - df_inv['ending_teorico']
@@ -626,7 +631,6 @@ def show_inventory():
             if not anomalies.empty:
                 st.dataframe(anomalies)
                 
-                # Export Excel (Sostituisce PDF per stabilità)
                 buffer = BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     anomalies.to_excel(writer, index=False, sheet_name="Anomalie")
@@ -634,7 +638,7 @@ def show_inventory():
             else:
                 st.success("Nessuna anomalia significativa rilevata.")
 
-# --- FUNNEL AUDIT (CODICE MADRE COMPLETO) ---
+# --- FUNNEL AUDIT ---
 def show_funnel_audit():
     st.title("🧭 PPC Funnel Audit")
     st.caption("Carica File Macro per mappare il funnel.")
@@ -646,7 +650,6 @@ def show_funnel_audit():
         if df is None: return
         df = clean_columns(df)
 
-        # Parsing colonne
         def pick(df, candidates):
             for c in candidates:
                 for col in df.columns:
@@ -661,11 +664,9 @@ def show_funnel_audit():
             st.error("Colonne essenziali (Nome Campagna, Spesa) non trovate.")
             return
 
-        # Pulizia
         df['Spend'] = pd.to_numeric(df[c_spend].astype(str).str.replace(',','.'), errors='coerce').fillna(0)
         df['Sales'] = pd.to_numeric(df[c_sales].astype(str).str.replace(',','.'), errors='coerce').fillna(0) if c_sales else 0
 
-        # Logica Regex Madre
         def get_layer(name):
             n = str(name).upper()
             if re.search(r"SBV|VIDEO", n): return "MOFU (Video)"
@@ -677,7 +678,6 @@ def show_funnel_audit():
 
         df['Layer'] = df[c_name].apply(get_layer)
         
-        # Aggregazione
         kpi = df.groupby('Layer')[['Spend', 'Sales']].sum().reset_index()
         kpi['ROAS'] = kpi['Sales'] / kpi['Spend'].replace(0, 1)
         
@@ -698,11 +698,9 @@ def show_funnel_audit():
 # 5. MAIN NAVIGATOR
 # ==============================================================================
 def main():
-    # Sidebar
     with st.sidebar:
         st.markdown("<div class='sidebar-logo'>S<span>Z</span> SALESZONE</div>", unsafe_allow_html=True)
         
-        # Menu Exact Match del Codice Madre
         MENU_VOCI = [
             "Home",
             "PPC Optimizer",
@@ -718,7 +716,6 @@ def main():
         st.markdown("---")
         st.caption("© 2025 Saleszone Agency")
 
-    # Routing
     if selected == "Home": show_home()
     elif selected == "PPC Optimizer": show_ppc_optimizer()
     elif selected == "Brand Analytics Insights": show_brand_analytics()
