@@ -324,7 +324,7 @@ def show_ppc_optimizer():
         waste_terms = df[(df['Sales'] == 0) & (df['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Portfolio', 'Search Term', 'Keyword', 'Campaign', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI)
+        # 5. INTEGRAZIONE AI (GEMINI) - MODIFICATA PER CAMPAGNA SINGOLA
         st.markdown("---")
         st.subheader("🤖 Analisi AI Termini Negativi (Gemini)")
         
@@ -334,22 +334,38 @@ def show_ppc_optimizer():
             st.warning("⚠️ Per usare l'analisi AI, inserisci la tua API Key di Google Gemini nella sidebar a sinistra.")
         else:
             if not waste_terms.empty:
-                st.markdown("Analisi semantica dei termini senza vendite per suggerire corrispondenze negative.")
-                product_context = st.text_area("📄 Incolla qui il testo della Pagina Prodotto (Titolo, Bullet Points):", height=150)
+                st.markdown("Seleziona una campagna specifica per analizzare i suoi termini inefficienti con l'IA.")
+                
+                # 1. Seleziona Campagna per AI
+                # Filtriamo solo le campagne presenti in waste_terms (quelle che hanno problemi)
+                waste_campaigns = sorted(waste_terms['Campaign'].unique().tolist())
+                selected_campaign_ai = st.selectbox("Seleziona la Campagna da analizzare", waste_campaigns, key="ai_campaign_select")
+                
+                # 2. Filtra i termini per quella campagna
+                target_waste_terms = waste_terms[waste_terms['Campaign'] == selected_campaign_ai]
+                
+                st.info(f"Trovati **{len(target_waste_terms)}** termini senza vendite per la campagna **{selected_campaign_ai}**.")
+                
+                # 3. Input Contesto Prodotto
+                product_context = st.text_area("📄 Incolla qui il testo della Pagina Prodotto (Titolo, Bullet Points):", height=150, key="ai_context_input")
                 
                 if st.button("✨ Genera Analisi con Gemini"):
                     if not product_context:
                         st.error("Per favore incolla il testo della pagina prodotto.")
+                    elif target_waste_terms.empty:
+                        st.error("Non ci sono termini da analizzare per questa campagna.")
                     else:
                         with st.spinner("Gemini sta analizzando i termini..."):
                             try:
                                 genai.configure(api_key=api_key)
                                 model = genai.GenerativeModel('gemini-pro')
-                                terms_list = waste_terms['Search Term'].head(100).tolist()
+                                
+                                # Prende i termini (max 150 per evitare limiti token)
+                                terms_list = target_waste_terms['Search Term'].head(150).tolist()
                                 terms_str = "\n".join(terms_list)
                                 
                                 prompt = f"""
-                                Analizza i termini di ricerca elencati qui sotto e il contenuto della pagina prodotto fornito.
+                                Analizza i termini di ricerca elencati qui sotto (provenienti dalla campagna "{selected_campaign_ai}") e il contenuto della pagina prodotto fornito.
                                 
                                 ELENCO TERMINI DI RICERCA (Senza vendite):
                                 {terms_str}
@@ -501,7 +517,7 @@ def show_sqp():
         st.dataframe(df.head(50), use_container_width=True)
         download_excel({"SQP": df}, "sqp_analysis.xlsx")
 
-# --- INVENTARIO FBA (LOGICA MADRE + DETTAGLIO) ---
+# --- INVENTARIO FBA ---
 def show_inventory():
     st.title("📦 Controllo Inventario FBA")
     with st.expander("ℹ️ Guida", expanded=False):
@@ -514,25 +530,10 @@ def show_inventory():
         df = clean_columns(df)
         df.columns = df.columns.str.lower()
 
-        # Check colonne
-        numeric_cols = ['starting warehouse balance', 'receipts', 'customer shipments', 'customer returns', 
-                        'vendor returns', 'warehouse transfer in/out', 'found', 'lost', 'damaged', 
-                        'disposed', 'ending warehouse balance']
-        
-        for c in numeric_cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+        req = ['starting warehouse balance', 'receipts', 'customer shipments', 'customer returns', 'found', 'lost', 'damaged', 'disposed', 'ending warehouse balance']
+        for c in req:
+            if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-        if 'date' in df.columns: df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        
-        st.subheader("📊 KPI Globali")
-        c1, c2 = st.columns(2)
-        start = df['starting warehouse balance'].sum() if 'starting warehouse balance' in df.columns else 0
-        end = df['ending warehouse balance'].sum() if 'ending warehouse balance' in df.columns else 0
-        c1.metric("Starting Balance", f"{int(start)}")
-        c2.metric("Ending Balance", f"{int(end)}")
-
-        # Logica Anomalia "Delta" (Dal Codice Madre)
         if 'ending warehouse balance' in df.columns:
             cols_inc = [c for c in ['receipts', 'customer returns', 'found'] if c in df.columns]
             cols_dec = [c for c in ['customer shipments', 'lost', 'damaged', 'disposed'] if c in df.columns]
@@ -552,7 +553,6 @@ def show_inventory():
             else:
                 st.success("Nessuna anomalia significativa rilevata.")
 
-        # Logica "Damaged durante trasferimento" (Recuperata e semplificata per performance)
         if 'damaged' in df.columns and 'transaction type' in df.columns:
             damaged_transfer = df[
                 (df['transaction type'].astype(str).str.lower().str.contains('adjustment')) & 
@@ -565,7 +565,7 @@ def show_inventory():
                 st.write("Queste unità sono state marcate come 'Damaged'. Verifica se sono state rimborsate.")
                 st.dataframe(damaged_transfer)
 
-# --- FUNNEL AUDIT (COMPLETO) ---
+# --- FUNNEL AUDIT ---
 def show_funnel_audit():
     st.title("🧭 PPC Funnel Audit")
     with st.expander("ℹ️ Guida", expanded=False):
@@ -593,7 +593,6 @@ def show_funnel_audit():
         df['Spend'] = pd.to_numeric(df[c_spend].astype(str).str.replace(',','.'), errors='coerce').fillna(0)
         df['Sales'] = pd.to_numeric(df[c_sales].astype(str).str.replace(',','.'), errors='coerce').fillna(0) if c_sales else 0
 
-        # Logica Regex Completa (Madre)
         def get_layer(name):
             n = str(name).upper()
             if re.search(r"SBV|VIDEO", n): return "MOFU (Video)"
@@ -653,7 +652,6 @@ def show_invoices():
 # ==============================================================================
 def main():
     with st.sidebar:
-        # LOGO UFFICIALE (IMMAGINE)
         if os.path.exists("logo.png"):
             logo_b64 = get_img_as_base64("logo.png")
             if logo_b64:
@@ -671,7 +669,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        # API Key
         st.markdown("### 🔑 Impostazioni AI")
         api_key = st.text_input("Gemini API Key", type="password", help="Inserisci la chiave per l'AI Consultant")
         if api_key: st.session_state['gemini_api_key'] = api_key
