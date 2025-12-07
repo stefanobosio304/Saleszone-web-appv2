@@ -21,7 +21,9 @@ st.set_page_config(
 
 # Inizializzazione Session State
 if 'product_library' not in st.session_state:
-    st.session_state['product_library'] = [] 
+    st.session_state['product_library'] = []
+if 'is_admin' not in st.session_state:
+    st.session_state['is_admin'] = False
 
 # ==============================================================================
 # 2. STILE E BRANDING (CSS SALESZONE)
@@ -82,13 +84,18 @@ def inject_custom_css():
         .stTextArea textarea {
             border: 1px solid #2940A8;
         }
+        /* Success Message */
+        .stSuccess {
+            background-color: #f0fdf4;
+            color: #15803d;
+        }
         </style>
     """, unsafe_allow_html=True)
 
 inject_custom_css()
 
 # ==============================================================================
-# 3. UTILITIES GLOBALI (PRIVACY & CARICAMENTO)
+# 3. UTILITIES GLOBALI (PRIVACY INTELLIGENTE & CARICAMENTO)
 # ==============================================================================
 def get_img_as_base64(file):
     try:
@@ -100,36 +107,30 @@ def get_img_as_base64(file):
 
 def mask_sensitive_data(df):
     """
-    Oscura gli ASIN definiti nella blacklist ovunque compaiano nel dataframe.
+    Oscura gli ASIN se l'utente NON è admin.
     """
     if df is None: return None
     
-    # Recupera lista ASIN da nascondere (da input o secrets)
+    # SE L'UTENTE È ADMIN, MOSTRA TUTTO (Salta oscuramento)
+    if st.session_state.get('is_admin', False):
+        return df
+    
+    # Recupera lista ASIN da nascondere SOLO dai Secrets
     hidden_list = []
     
-    # 1. Da Secrets (Permanente)
     if "HIDDEN_ASINS" in st.secrets:
-        # Si assume una stringa separata da virgola nei secrets: "B00123,B00456"
-        hidden_list.extend([x.strip() for x in st.secrets["HIDDEN_ASINS"].split(",")])
+        # Divide la stringa dei secrets e pulisce gli spazi
+        hidden_list = [x.strip() for x in st.secrets["HIDDEN_ASINS"].split(",") if x.strip()]
         
-    # 2. Da Input Sidebar (Temporaneo)
-    if 'temp_hidden_asins' in st.session_state and st.session_state['temp_hidden_asins']:
-        hidden_list.extend([x.strip() for x in st.session_state['temp_hidden_asins'].split(",")])
-    
-    # Rimuovi duplicati e stringhe vuote
-    hidden_list = list(set([h for h in hidden_list if h]))
-    
     if not hidden_list:
         return df
         
     # Applica mascheramento su colonne di testo
-    # Cerchiamo colonne che potrebbero contenere ASIN (object/string)
     text_cols = df.select_dtypes(include=['object']).columns
     
     for col in text_cols:
         for secret_asin in hidden_list:
-            # Sostituisce l'ASIN con ******
-            # case=False per coprire sia minuscolo che maiuscolo
+            # Sostituisce l'ASIN con ****** (Case insensitive)
             df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
             
     return df
@@ -159,7 +160,7 @@ def load_data_robust(file):
         st.error(f"Errore lettura file: {e}")
         return None
         
-    # Applica filtro privacy subito dopo il caricamento
+    # Applica filtro privacy (se non admin)
     if df is not None:
         df = mask_sensitive_data(df)
         
@@ -415,7 +416,9 @@ def show_ppc_optimizer():
         st.markdown("---")
         st.subheader("🤖 Analisi AI Termini Negativi (Gemini)")
         
+        # LOGICA GESTIONE API KEY (SECRETS + INPUT)
         api_key = None
+        
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
             st.success("✅ Gemini API Key caricata dalle impostazioni (Secrets).")
@@ -434,6 +437,7 @@ def show_ppc_optimizer():
                 target_waste_terms = waste_terms[waste_terms['Campaign'] == selected_campaign_ai]
                 st.info(f"Trovati **{len(target_waste_terms)}** termini senza vendite per la campagna **{selected_campaign_ai}**.")
                 
+                # B. Seleziona Contesto da Libreria
                 st.markdown("##### 📌 Contesto Prodotto")
                 use_library = st.checkbox("Usa prodotto dalla Libreria ASIN", value=True)
                 
@@ -453,16 +457,18 @@ def show_ppc_optimizer():
                 else:
                     product_context = st.text_area("📄 Incolla qui il testo della Pagina Prodotto (Titolo, Bullet Points):", height=150, key="ai_context_manual")
                 
+                # C. Generazione
                 if st.button("✨ Genera Analisi con Gemini"):
                     if not product_context:
-                        st.error("Manca il contesto del prodotto.")
+                        st.error("Manca il contesto del prodotto (selezionalo dalla libreria o incollalo).")
                     elif target_waste_terms.empty:
-                        st.error("Non ci sono termini da analizzare.")
+                        st.error("Non ci sono termini da analizzare per questa campagna.")
                     else:
                         with st.spinner("Gemini sta analizzando i termini..."):
                             try:
                                 genai.configure(api_key=api_key)
                                 model = genai.GenerativeModel('gemini-pro')
+                                
                                 terms_list = target_waste_terms['Search Term'].head(150).tolist()
                                 terms_str = "\n".join(terms_list)
                                 
@@ -778,17 +784,27 @@ def main():
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
             st.session_state['gemini_api_key'] = api_key
-            st.success("✅ API Key caricata da Secrets")
+            st.success("✅ API Key attiva")
         else:
             api_key = st.text_input("Gemini API Key", type="password", help="Inserisci la chiave per l'AI Consultant")
             if api_key: st.session_state['gemini_api_key'] = api_key
         
-        # PRIVACY SETTINGS
-        st.markdown("### 🔒 Filtri Privacy")
-        with st.expander("Nascondi ASIN"):
-            temp_hidden = st.text_area("ASIN da oscurare (separati da virgola)", help="Esempio: B00123, B00456")
-            if temp_hidden:
-                st.session_state['temp_hidden_asins'] = temp_hidden
+        # ADMIN LOGIN (Nascosto)
+        with st.expander("Admin Login"):
+            admin_pwd = st.text_input("Password", type="password", key="admin_pwd")
+            if st.button("Login"):
+                if "ADMIN_PASSWORD" in st.secrets and admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+                    st.session_state['is_admin'] = True
+                    st.success("Accesso Admin!")
+                    st.rerun()
+                else:
+                    st.error("Password errata")
+        
+        # Logout
+        if st.session_state.get('is_admin'):
+            if st.button("Logout"):
+                st.session_state['is_admin'] = False
+                st.rerun()
         
         st.markdown("---")
         
