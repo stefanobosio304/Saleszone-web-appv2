@@ -5,3 +5,4 @@ xlsxwriter
 openpyxl
 plotly
 google-generativeai
+firebase-admin
