@@ -9,11 +9,11 @@ import os
 import base64
 import google.generativeai as genai
 
-# Firebase Imports
-from firebase_admin import credentials, firestore, initialize_app, get_app
+# Firebase Imports (se li userai in futuro, altrimenti li lasciamo commentati per evitare errori se non configurati)
+# from firebase_admin import credentials, firestore, initialize_app, get_app
 
 # ==============================================================================
-# 1. CONFIGURAZIONE PAGINA & FIREBASE
+# 1. CONFIGURAZIONE PAGINA
 # ==============================================================================
 st.set_page_config(
     page_title="Saleszone | Suite Operativa",
@@ -22,12 +22,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inizializzazione Firebase (Gestione Singleton per evitare errori di riavvio)
-# NOTA: Per far funzionare questo online, dovrai caricare le credenziali Firebase nei secrets di Streamlit.
-# Per ora usiamo una struttura in memoria (session_state) per dimostrazione immediata senza config complessa.
-# Se vuoi persistenza reale su cloud, dimmelo e aggiungiamo il setup JSON.
+# Inizializzazione Session State per la Libreria Prodotti (Memoria temporanea)
 if 'product_library' not in st.session_state:
-    st.session_state['product_library'] = [] # Lista di dizionari: {asin, brand, name, context}
+    st.session_state['product_library'] = [] 
 
 # ==============================================================================
 # 2. STILE E BRANDING (CSS SALESZONE)
@@ -160,12 +157,11 @@ def download_excel(dfs_dict, filename):
 # 4. MODULI APPLICAZIONE
 # ==============================================================================
 
-# --- LIBRERIA PRODOTTI (NUOVA FUNZIONE) ---
+# --- LIBRERIA PRODOTTI ---
 def show_product_library():
     st.title("📚 Libreria Prodotti (ASIN)")
     st.write("Gestisci qui i tuoi prodotti per velocizzare l'analisi AI.")
 
-    # 1. Aggiungi Nuovo Prodotto
     with st.expander("➕ Aggiungi Nuovo Prodotto", expanded=True):
         c1, c2 = st.columns(2)
         new_brand = c1.text_input("Brand")
@@ -175,7 +171,6 @@ def show_product_library():
         
         if st.button("Salva Prodotto"):
             if new_asin and new_name:
-                # Verifica duplicati
                 exists = any(p['asin'] == new_asin for p in st.session_state['product_library'])
                 if exists:
                     st.error(f"L'ASIN {new_asin} esiste già nella libreria.")
@@ -191,28 +186,23 @@ def show_product_library():
                 st.warning("Compila almeno ASIN e Nome Prodotto.")
 
     st.divider()
-
-    # 2. Visualizza e Filtra Libreria
     st.subheader("📦 I tuoi prodotti salvati")
     
     if not st.session_state['product_library']:
         st.info("La libreria è vuota. Aggiungi il primo prodotto sopra.")
     else:
-        # Filtri
         c_filter1, c_filter2 = st.columns(2)
-        filter_brand = c_filter1.selectbox("Filtra per Brand", ["Tutti"] + sorted(list(set([p['brand'] for p in st.session_state['product_library'] if p['brand']]))))
+        brands = sorted(list(set([p['brand'] for p in st.session_state['product_library'] if p['brand']])))
+        filter_brand = c_filter1.selectbox("Filtra per Brand", ["Tutti"] + brands)
         
-        # Logica di visualizzazione
         display_list = st.session_state['product_library']
         if filter_brand != "Tutti":
             display_list = [p for p in display_list if p['brand'] == filter_brand]
         
-        # Tabella semplice
         if display_list:
             df_lib = pd.DataFrame(display_list)
             st.dataframe(df_lib[['brand', 'asin', 'name']], use_container_width=True)
             
-            # Cancellazione
             to_delete = st.selectbox("Seleziona un prodotto da ELIMINARE", ["-- Nessuno --"] + [f"{p['asin']} - {p['name']}" for p in display_list])
             if to_delete != "-- Nessuno --":
                 if st.button("🗑️ Elimina selezionato"):
@@ -242,7 +232,6 @@ def show_home():
         del tuo account Amazon Seller. 
         """)
         
-        # KPI Rapidi dalla Libreria
         prod_count = len(st.session_state['product_library'])
         st.metric("Prodotti in Libreria", prod_count)
     
@@ -389,15 +378,24 @@ def show_ppc_optimizer():
         waste_terms = df[(df['Sales'] == 0) & (df['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Portfolio', 'Search Term', 'Keyword', 'Campaign', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # 5. INTEGRAZIONE AI (GEMINI) - CON LIBRERIA ASIN
+        # 5. INTEGRAZIONE AI (GEMINI) - CON LIBRERIA ASIN E SECRETS
         st.markdown("---")
         st.subheader("🤖 Analisi AI Termini Negativi (Gemini)")
         
-        api_key = st.session_state.get('gemini_api_key', '')
+        # LOGICA GESTIONE API KEY (SECRETS + INPUT)
+        api_key = None
         
-        if not api_key:
-            st.warning("⚠️ Per usare l'analisi AI, inserisci la tua API Key di Google Gemini nella sidebar a sinistra.")
+        # 1. Cerca nei secrets (priorità)
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ Gemini API Key caricata dalle impostazioni (Secrets).")
+        # 2. Cerca nella sessione o input manuale
         else:
+            api_key = st.session_state.get('gemini_api_key', '')
+            if not api_key:
+                st.warning("⚠️ Chiave non trovata nei Secrets. Inseriscila nella sidebar per usare l'AI.")
+        
+        if api_key:
             if not waste_terms.empty:
                 st.markdown("Seleziona una campagna specifica per analizzare i suoi termini inefficienti con l'IA.")
                 
@@ -415,17 +413,14 @@ def show_ppc_optimizer():
                 product_context = ""
                 
                 if use_library and st.session_state['product_library']:
-                    # Filtra libreria per brand se utile, o mostra tutto
                     lib_options = [f"{p['brand']} - {p['name']} ({p['asin']})" for p in st.session_state['product_library']]
                     selected_prod_str = st.selectbox("Scegli Prodotto", lib_options)
                     
-                    # Recupera il contesto
                     if selected_prod_str:
                         sel_asin = selected_prod_str.split("(")[-1].replace(")", "")
                         prod_data = next((p for p in st.session_state['product_library'] if p['asin'] == sel_asin), None)
                         if prod_data:
                             product_context = prod_data['context']
-                            st.caption(f"Contesto caricato per ASIN: {sel_asin}")
                             with st.expander("Vedi contesto caricato"):
                                 st.text(product_context)
                 else:
@@ -734,6 +729,7 @@ def show_invoices():
 # ==============================================================================
 def main():
     with st.sidebar:
+        # LOGO
         if os.path.exists("logo.png"):
             logo_b64 = get_img_as_base64("logo.png")
             if logo_b64:
@@ -751,9 +747,18 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
+        # API Key (Da Secrets o Input)
         st.markdown("### 🔑 Impostazioni AI")
-        api_key = st.text_input("Gemini API Key", type="password", help="Inserisci la chiave per l'AI Consultant")
-        if api_key: st.session_state['gemini_api_key'] = api_key
+        
+        if "GEMINI_API_KEY" in st.secrets:
+            # Se la chiave è nei secrets, la carichiamo ma mostriamo un indicatore
+            st.session_state['gemini_api_key'] = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ API Key caricata da Secrets")
+        else:
+            # Altrimenti input manuale
+            api_key = st.text_input("Gemini API Key", type="password", help="Inserisci la chiave per l'AI Consultant")
+            if api_key: st.session_state['gemini_api_key'] = api_key
+        
         st.markdown("---")
         
         MENU_VOCI = [
@@ -775,3 +780,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
+
+### 2. Come impostare la chiave permanente (Streamlit Secrets)
+
+Per non dover inserire la chiave API ogni volta, segui questi passaggi su **Streamlit Cloud**:
+
+1.  Vai alla Dashboard della tua App su [share.streamlit.io](https://share.streamlit.io).
+2.  Clicca sui tre puntini (`⋮`) accanto alla tua app e seleziona **"Settings"**.
+3.  Clicca sulla scheda **"Secrets"**.
+4.  Nel box di testo che appare, scrivi questo:
+
+```toml
+GEMINI_API_KEY = "incolla-qui-la-tua-chiave-api-che-hai-preso-da-google"
