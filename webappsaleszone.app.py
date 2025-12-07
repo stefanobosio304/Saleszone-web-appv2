@@ -9,9 +9,6 @@ import os
 import base64
 import google.generativeai as genai
 
-# Firebase Imports (se li userai in futuro, altrimenti li lasciamo commentati per evitare errori se non configurati)
-# from firebase_admin import credentials, firestore, initialize_app, get_app
-
 # ==============================================================================
 # 1. CONFIGURAZIONE PAGINA
 # ==============================================================================
@@ -22,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inizializzazione Session State per la Libreria Prodotti (Memoria temporanea)
+# Inizializzazione Session State
 if 'product_library' not in st.session_state:
     st.session_state['product_library'] = [] 
 
@@ -91,7 +88,7 @@ def inject_custom_css():
 inject_custom_css()
 
 # ==============================================================================
-# 3. UTILITIES GLOBALI
+# 3. UTILITIES GLOBALI (PRIVACY & CARICAMENTO)
 # ==============================================================================
 def get_img_as_base64(file):
     try:
@@ -101,36 +98,72 @@ def get_img_as_base64(file):
     except:
         return None
 
+def mask_sensitive_data(df):
+    """
+    Oscura gli ASIN definiti nella blacklist ovunque compaiano nel dataframe.
+    """
+    if df is None: return None
+    
+    # Recupera lista ASIN da nascondere (da input o secrets)
+    hidden_list = []
+    
+    # 1. Da Secrets (Permanente)
+    if "HIDDEN_ASINS" in st.secrets:
+        # Si assume una stringa separata da virgola nei secrets: "B00123,B00456"
+        hidden_list.extend([x.strip() for x in st.secrets["HIDDEN_ASINS"].split(",")])
+        
+    # 2. Da Input Sidebar (Temporaneo)
+    if 'temp_hidden_asins' in st.session_state and st.session_state['temp_hidden_asins']:
+        hidden_list.extend([x.strip() for x in st.session_state['temp_hidden_asins'].split(",")])
+    
+    # Rimuovi duplicati e stringhe vuote
+    hidden_list = list(set([h for h in hidden_list if h]))
+    
+    if not hidden_list:
+        return df
+        
+    # Applica mascheramento su colonne di testo
+    # Cerchiamo colonne che potrebbero contenere ASIN (object/string)
+    text_cols = df.select_dtypes(include=['object']).columns
+    
+    for col in text_cols:
+        for secret_asin in hidden_list:
+            # Sostituisce l'ASIN con ******
+            # case=False per coprire sia minuscolo che maiuscolo
+            df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
+            
+    return df
+
 def load_data_robust(file):
     if file is None: return None
     
-    if file.name.endswith('.xlsx') or file.name.endswith('.xls'):
-        try:
-            return pd.read_excel(file, engine='openpyxl')
-        except Exception as e:
-            st.error(f"Errore lettura Excel: {e}")
-            return None
-
-    if file.name.endswith('.csv'):
-        try:
+    df = None
+    try:
+        if file.name.endswith('.xlsx') or file.name.endswith('.xls'):
+            df = pd.read_excel(file, engine='openpyxl')
+        
+        elif file.name.endswith('.csv'):
             content = file.getvalue().decode('utf-8', errors='ignore')
             first_line = content.split('\n')[0]
             skip_rows = 1 if ("Marchio=" in first_line or "Periodo" in first_line) else 0
             
             file.seek(0)
-            try: return pd.read_csv(file, encoding='utf-8', skiprows=skip_rows)
-            except: pass
-            
-            file.seek(0)
-            try: return pd.read_csv(file, sep=';', encoding='utf-8', skiprows=skip_rows)
-            except: pass
-            
-            file.seek(0)
-            return pd.read_csv(file, sep=';', encoding='latin1', skiprows=skip_rows)
-        except Exception as e:
-            st.error(f"Errore CSV: {e}")
-            return None
-    return None
+            try: df = pd.read_csv(file, encoding='utf-8', skiprows=skip_rows)
+            except: 
+                file.seek(0)
+                try: df = pd.read_csv(file, sep=';', encoding='utf-8', skiprows=skip_rows)
+                except:
+                    file.seek(0)
+                    df = pd.read_csv(file, sep=';', encoding='latin1', skiprows=skip_rows)
+    except Exception as e:
+        st.error(f"Errore lettura file: {e}")
+        return None
+        
+    # Applica filtro privacy subito dopo il caricamento
+    if df is not None:
+        df = mask_sensitive_data(df)
+        
+    return df
 
 def clean_columns(df):
     if df is not None:
@@ -382,14 +415,10 @@ def show_ppc_optimizer():
         st.markdown("---")
         st.subheader("🤖 Analisi AI Termini Negativi (Gemini)")
         
-        # LOGICA GESTIONE API KEY (SECRETS + INPUT)
         api_key = None
-        
-        # 1. Cerca nei secrets (priorità)
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
             st.success("✅ Gemini API Key caricata dalle impostazioni (Secrets).")
-        # 2. Cerca nella sessione o input manuale
         else:
             api_key = st.session_state.get('gemini_api_key', '')
             if not api_key:
@@ -399,14 +428,12 @@ def show_ppc_optimizer():
             if not waste_terms.empty:
                 st.markdown("Seleziona una campagna specifica per analizzare i suoi termini inefficienti con l'IA.")
                 
-                # A. Seleziona Campagna
                 waste_campaigns = sorted(waste_terms['Campaign'].unique().tolist())
                 selected_campaign_ai = st.selectbox("Seleziona la Campagna da analizzare", waste_campaigns, key="ai_campaign_select")
                 
                 target_waste_terms = waste_terms[waste_terms['Campaign'] == selected_campaign_ai]
                 st.info(f"Trovati **{len(target_waste_terms)}** termini senza vendite per la campagna **{selected_campaign_ai}**.")
                 
-                # B. Seleziona Contesto da Libreria
                 st.markdown("##### 📌 Contesto Prodotto")
                 use_library = st.checkbox("Usa prodotto dalla Libreria ASIN", value=True)
                 
@@ -426,18 +453,16 @@ def show_ppc_optimizer():
                 else:
                     product_context = st.text_area("📄 Incolla qui il testo della Pagina Prodotto (Titolo, Bullet Points):", height=150, key="ai_context_manual")
                 
-                # C. Generazione
                 if st.button("✨ Genera Analisi con Gemini"):
                     if not product_context:
-                        st.error("Manca il contesto del prodotto (selezionalo dalla libreria o incollalo).")
+                        st.error("Manca il contesto del prodotto.")
                     elif target_waste_terms.empty:
-                        st.error("Non ci sono termini da analizzare per questa campagna.")
+                        st.error("Non ci sono termini da analizzare.")
                     else:
                         with st.spinner("Gemini sta analizzando i termini..."):
                             try:
                                 genai.configure(api_key=api_key)
                                 model = genai.GenerativeModel('gemini-pro')
-                                
                                 terms_list = target_waste_terms['Search Term'].head(150).tolist()
                                 terms_str = "\n".join(terms_list)
                                 
@@ -751,13 +776,19 @@ def main():
         st.markdown("### 🔑 Impostazioni AI")
         
         if "GEMINI_API_KEY" in st.secrets:
-            # Se la chiave è nei secrets, la carichiamo ma mostriamo un indicatore
-            st.session_state['gemini_api_key'] = st.secrets["GEMINI_API_KEY"]
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.session_state['gemini_api_key'] = api_key
             st.success("✅ API Key caricata da Secrets")
         else:
-            # Altrimenti input manuale
             api_key = st.text_input("Gemini API Key", type="password", help="Inserisci la chiave per l'AI Consultant")
             if api_key: st.session_state['gemini_api_key'] = api_key
+        
+        # PRIVACY SETTINGS
+        st.markdown("### 🔒 Filtri Privacy")
+        with st.expander("Nascondi ASIN"):
+            temp_hidden = st.text_area("ASIN da oscurare (separati da virgola)", help="Esempio: B00123, B00456")
+            if temp_hidden:
+                st.session_state['temp_hidden_asins'] = temp_hidden
         
         st.markdown("---")
         
