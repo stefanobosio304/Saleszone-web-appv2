@@ -9,8 +9,11 @@ import os
 import base64
 import google.generativeai as genai
 
+# Firebase Imports
+from firebase_admin import credentials, firestore, initialize_app, get_app
+
 # ==============================================================================
-# 1. CONFIGURAZIONE PAGINA
+# 1. CONFIGURAZIONE PAGINA & FIREBASE
 # ==============================================================================
 st.set_page_config(
     page_title="Saleszone | Suite Operativa",
@@ -18,6 +21,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Inizializzazione Firebase (Gestione Singleton per evitare errori di riavvio)
+# NOTA: Per far funzionare questo online, dovrai caricare le credenziali Firebase nei secrets di Streamlit.
+# Per ora usiamo una struttura in memoria (session_state) per dimostrazione immediata senza config complessa.
+# Se vuoi persistenza reale su cloud, dimmelo e aggiungiamo il setup JSON.
+if 'product_library' not in st.session_state:
+    st.session_state['product_library'] = [] # Lista di dizionari: {asin, brand, name, context}
 
 # ==============================================================================
 # 2. STILE E BRANDING (CSS SALESZONE)
@@ -95,7 +105,6 @@ def get_img_as_base64(file):
         return None
 
 def load_data_robust(file):
-    """Caricamento file CSV/Excel robusto."""
     if file is None: return None
     
     if file.name.endswith('.xlsx') or file.name.endswith('.xls'):
@@ -151,6 +160,66 @@ def download_excel(dfs_dict, filename):
 # 4. MODULI APPLICAZIONE
 # ==============================================================================
 
+# --- LIBRERIA PRODOTTI (NUOVA FUNZIONE) ---
+def show_product_library():
+    st.title("📚 Libreria Prodotti (ASIN)")
+    st.write("Gestisci qui i tuoi prodotti per velocizzare l'analisi AI.")
+
+    # 1. Aggiungi Nuovo Prodotto
+    with st.expander("➕ Aggiungi Nuovo Prodotto", expanded=True):
+        c1, c2 = st.columns(2)
+        new_brand = c1.text_input("Brand")
+        new_asin = c2.text_input("ASIN")
+        new_name = st.text_input("Nome Prodotto (Alias)")
+        new_context = st.text_area("Contenuto Pagina Prodotto (Titolo, Bullet Points, Descrizione)", height=150, help="Questo testo verrà passato all'IA come contesto.")
+        
+        if st.button("Salva Prodotto"):
+            if new_asin and new_name:
+                # Verifica duplicati
+                exists = any(p['asin'] == new_asin for p in st.session_state['product_library'])
+                if exists:
+                    st.error(f"L'ASIN {new_asin} esiste già nella libreria.")
+                else:
+                    st.session_state['product_library'].append({
+                        "brand": new_brand,
+                        "asin": new_asin,
+                        "name": new_name,
+                        "context": new_context
+                    })
+                    st.success(f"Prodotto **{new_name}** aggiunto con successo!")
+            else:
+                st.warning("Compila almeno ASIN e Nome Prodotto.")
+
+    st.divider()
+
+    # 2. Visualizza e Filtra Libreria
+    st.subheader("📦 I tuoi prodotti salvati")
+    
+    if not st.session_state['product_library']:
+        st.info("La libreria è vuota. Aggiungi il primo prodotto sopra.")
+    else:
+        # Filtri
+        c_filter1, c_filter2 = st.columns(2)
+        filter_brand = c_filter1.selectbox("Filtra per Brand", ["Tutti"] + sorted(list(set([p['brand'] for p in st.session_state['product_library'] if p['brand']]))))
+        
+        # Logica di visualizzazione
+        display_list = st.session_state['product_library']
+        if filter_brand != "Tutti":
+            display_list = [p for p in display_list if p['brand'] == filter_brand]
+        
+        # Tabella semplice
+        if display_list:
+            df_lib = pd.DataFrame(display_list)
+            st.dataframe(df_lib[['brand', 'asin', 'name']], use_container_width=True)
+            
+            # Cancellazione
+            to_delete = st.selectbox("Seleziona un prodotto da ELIMINARE", ["-- Nessuno --"] + [f"{p['asin']} - {p['name']}" for p in display_list])
+            if to_delete != "-- Nessuno --":
+                if st.button("🗑️ Elimina selezionato"):
+                    asin_del = to_delete.split(" - ")[0]
+                    st.session_state['product_library'] = [p for p in st.session_state['product_library'] if p['asin'] != asin_del]
+                    st.rerun()
+
 # --- HOME ---
 def show_home():
     col1, col2 = st.columns([1, 2])
@@ -170,16 +239,12 @@ def show_home():
         st.markdown("### Il tuo spazio di crescita su Amazon.")
         st.write("""
         Questa suite operativa integra tutti gli strumenti necessari per l'analisi e l'ottimizzazione 
-        del tuo account Amazon Seller. Seleziona uno strumento dalla sidebar per iniziare.
+        del tuo account Amazon Seller. 
         """)
         
-        with st.expander("📚 Come iniziare"):
-            st.markdown("""
-            1.  **Inserisci la tua Gemini API Key** nella sidebar (opzionale, per le funzioni AI).
-            2.  **Seleziona uno strumento** dal menu laterale.
-            3.  **Carica i report** richiesti dalla guida.
-            4.  **Analizza** i dati ed esporta i risultati.
-            """)
+        # KPI Rapidi dalla Libreria
+        prod_count = len(st.session_state['product_library'])
+        st.metric("Prodotti in Libreria", prod_count)
     
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
@@ -324,7 +389,7 @@ def show_ppc_optimizer():
         waste_terms = df[(df['Sales'] == 0) & (df['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Portfolio', 'Search Term', 'Keyword', 'Campaign', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # 5. INTEGRAZIONE AI (GEMINI) - MODIFICATA PER CAMPAGNA SINGOLA
+        # 5. INTEGRAZIONE AI (GEMINI) - CON LIBRERIA ASIN
         st.markdown("---")
         st.subheader("🤖 Analisi AI Termini Negativi (Gemini)")
         
@@ -336,22 +401,40 @@ def show_ppc_optimizer():
             if not waste_terms.empty:
                 st.markdown("Seleziona una campagna specifica per analizzare i suoi termini inefficienti con l'IA.")
                 
-                # 1. Seleziona Campagna per AI
-                # Filtriamo solo le campagne presenti in waste_terms (quelle che hanno problemi)
+                # A. Seleziona Campagna
                 waste_campaigns = sorted(waste_terms['Campaign'].unique().tolist())
                 selected_campaign_ai = st.selectbox("Seleziona la Campagna da analizzare", waste_campaigns, key="ai_campaign_select")
                 
-                # 2. Filtra i termini per quella campagna
                 target_waste_terms = waste_terms[waste_terms['Campaign'] == selected_campaign_ai]
-                
                 st.info(f"Trovati **{len(target_waste_terms)}** termini senza vendite per la campagna **{selected_campaign_ai}**.")
                 
-                # 3. Input Contesto Prodotto
-                product_context = st.text_area("📄 Incolla qui il testo della Pagina Prodotto (Titolo, Bullet Points):", height=150, key="ai_context_input")
+                # B. Seleziona Contesto da Libreria
+                st.markdown("##### 📌 Contesto Prodotto")
+                use_library = st.checkbox("Usa prodotto dalla Libreria ASIN", value=True)
                 
+                product_context = ""
+                
+                if use_library and st.session_state['product_library']:
+                    # Filtra libreria per brand se utile, o mostra tutto
+                    lib_options = [f"{p['brand']} - {p['name']} ({p['asin']})" for p in st.session_state['product_library']]
+                    selected_prod_str = st.selectbox("Scegli Prodotto", lib_options)
+                    
+                    # Recupera il contesto
+                    if selected_prod_str:
+                        sel_asin = selected_prod_str.split("(")[-1].replace(")", "")
+                        prod_data = next((p for p in st.session_state['product_library'] if p['asin'] == sel_asin), None)
+                        if prod_data:
+                            product_context = prod_data['context']
+                            st.caption(f"Contesto caricato per ASIN: {sel_asin}")
+                            with st.expander("Vedi contesto caricato"):
+                                st.text(product_context)
+                else:
+                    product_context = st.text_area("📄 Incolla qui il testo della Pagina Prodotto (Titolo, Bullet Points):", height=150, key="ai_context_manual")
+                
+                # C. Generazione
                 if st.button("✨ Genera Analisi con Gemini"):
                     if not product_context:
-                        st.error("Per favore incolla il testo della pagina prodotto.")
+                        st.error("Manca il contesto del prodotto (selezionalo dalla libreria o incollalo).")
                     elif target_waste_terms.empty:
                         st.error("Non ci sono termini da analizzare per questa campagna.")
                     else:
@@ -360,7 +443,6 @@ def show_ppc_optimizer():
                                 genai.configure(api_key=api_key)
                                 model = genai.GenerativeModel('gemini-pro')
                                 
-                                # Prende i termini (max 150 per evitare limiti token)
                                 terms_list = target_waste_terms['Search Term'].head(150).tolist()
                                 terms_str = "\n".join(terms_list)
                                 
@@ -675,7 +757,7 @@ def main():
         st.markdown("---")
         
         MENU_VOCI = [
-            "Home", "PPC Optimizer", "Brand Analytics Insights", "SQP – Search Query Performance",
+            "Home", "Libreria Prodotti", "PPC Optimizer", "Brand Analytics Insights", "SQP – Search Query Performance",
             "Generazione Corrispettivi", "Controllo Inventario FBA", "Funnel Audit"
         ]
         selected = st.radio("Naviga", MENU_VOCI, label_visibility="collapsed")
@@ -683,6 +765,7 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if selected == "Home": show_home()
+    elif selected == "Libreria Prodotti": show_product_library()
     elif selected == "PPC Optimizer": show_ppc_optimizer()
     elif selected == "Brand Analytics Insights": show_brand_analytics()
     elif selected == "SQP – Search Query Performance": show_sqp()
