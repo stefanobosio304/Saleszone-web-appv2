@@ -26,6 +26,8 @@ if 'is_admin' not in st.session_state:
     st.session_state['is_admin'] = False
 if 'product_library' not in st.session_state:
     st.session_state['product_library'] = []
+if 'temp_library' not in st.session_state:
+    st.session_state['temp_library'] = []
 
 # ==============================================================================
 # 2. STILE E BRANDING
@@ -100,15 +102,20 @@ def get_img_as_base64(file):
 
 def load_product_library():
     all_products = []
-    # 1. Carica da Secrets
+    # 1. Carica da Secrets (Permanent)
     if "PRODUCT_LIBRARY_JSON" in st.secrets:
         try:
-            saved_products = json.loads(st.secrets["PRODUCT_LIBRARY_JSON"])
+            raw_data = st.secrets["PRODUCT_LIBRARY_JSON"]
+            saved_products = json.loads(raw_data)
             all_products.extend(saved_products)
-        except: pass
-    # 2. Carica da Session State
+        except Exception: pass
+
+    # 2. Carica da Session State (Temporary)
     if 'temp_library' in st.session_state:
-        all_products.extend(st.session_state['temp_library'])
+        secret_asins = [p['asin'] for p in all_products]
+        for temp_p in st.session_state['temp_library']:
+            if temp_p['asin'] not in secret_asins:
+                all_products.append(temp_p)
     
     # 3. Filtro Privacy
     if not st.session_state['is_admin']:
@@ -133,31 +140,68 @@ def mask_sensitive_data(df):
     return df
 
 def load_data_robust(file):
+    """
+    Funzione di caricamento potenziata:
+    - Rileva automaticamente se la prima riga è metadata (es. Marchio=...)
+    - Prova vari separatori (virgola, punto e virgola)
+    - Prova vari encoding (utf-8, latin1)
+    """
     if file is None: return None
     df = None
     try:
+        # GESTIONE EXCEL
         if file.name.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(file, engine='openpyxl')
+        
+        # GESTIONE CSV AVANZATA
         elif file.name.endswith('.csv'):
+            # Legge le prime righe come testo per capire la struttura
             content = file.getvalue().decode('utf-8', errors='ignore')
-            first_line = content.split('\n')[0]
-            skip_rows = 1 if ("Marchio=" in first_line or "Periodo" in first_line) else 0
+            lines = content.splitlines()
+            
+            # Cerca di capire dove iniziano i dati
+            header_row = 0
+            if len(lines) > 0:
+                first_line = lines[0]
+                # Se la prima riga contiene metadati Amazon tipici
+                if "Marchio=" in first_line or "Periodo" in first_line:
+                    header_row = 1
+            
+            # Reset del puntatore file
             file.seek(0)
-            try: df = pd.read_csv(file, encoding='utf-8', skiprows=skip_rows)
-            except: 
-                file.seek(0)
-                try: df = pd.read_csv(file, sep=';', encoding='utf-8', skiprows=skip_rows)
-                except:
-                    file.seek(0)
-                    df = pd.read_csv(file, sep=';', encoding='latin1', skiprows=skip_rows)
+            
+            # Tentativi di lettura
+            separators = [',', ';', '\t']
+            encodings = ['utf-8', 'latin1']
+            
+            for enc in encodings:
+                for sep in separators:
+                    try:
+                        file.seek(0)
+                        temp_df = pd.read_csv(file, sep=sep, encoding=enc, header=header_row)
+                        # Se ha letto più di 1 colonna, probabilmente è il formato giusto
+                        if temp_df.shape[1] > 1:
+                            df = temp_df
+                            break
+                    except:
+                        continue
+                if df is not None:
+                    break
+                    
     except Exception as e:
         st.error(f"Errore lettura file: {e}")
         return None
-    if df is not None: df = mask_sensitive_data(df)
+    
+    if df is not None: 
+        # Pulisce i nomi delle colonne da spazi e virgolette extra
+        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
+        df = mask_sensitive_data(df)
+        
     return df
 
 def clean_columns(df):
-    if df is not None: df.columns = df.columns.str.strip().str.replace("\ufeff", "")
+    if df is not None: 
+        df.columns = df.columns.str.strip().str.replace("\ufeff", "")
     return df
 
 def download_excel(dfs_dict, filename):
@@ -179,6 +223,7 @@ def show_product_library():
     
     if st.session_state['is_admin']:
         st.info("🔓 Modalità Admin Attiva")
+        
         with st.expander("➕ Aggiungi/Modifica Prodotto", expanded=False):
             c1, c2, c3 = st.columns([2, 2, 1])
             new_brand = c1.text_input("Brand")
@@ -189,7 +234,6 @@ def show_product_library():
             
             if st.button("Salva in Sessione"):
                 if new_asin and new_name:
-                    if 'temp_library' not in st.session_state: st.session_state['temp_library'] = []
                     st.session_state['temp_library'].append({
                         "brand": new_brand, "asin": new_asin, "name": new_name,
                         "context": new_context, "private": is_private
@@ -201,7 +245,9 @@ def show_product_library():
         full_library = load_product_library()
         if full_library:
             with st.expander("💾 Codice JSON per Secrets", expanded=True):
-                st.code(json.dumps(full_library, indent=2), language='json')
+                st.markdown("Copia questo codice nei Secrets assegnandolo a `PRODUCT_LIBRARY_JSON`.")
+                json_str = json.dumps(full_library, indent=2)
+                st.code(json_str, language='json')
 
     st.divider()
     st.subheader("Elenco Prodotti")
@@ -232,6 +278,7 @@ def show_home():
     with col2:
         st.title("Benvenuto in Saleszone")
         st.markdown("### Il tuo spazio di crescita su Amazon.")
+        st.write("Questa suite operativa integra tutti gli strumenti necessari per l'analisi e l'ottimizzazione.")
         products = load_product_library()
         st.metric("Prodotti in Libreria", len(products))
     
@@ -312,7 +359,10 @@ def show_ppc_optimizer():
         st.dataframe(cp_grp.style.format({'Spend': '€{:.2f}', 'Sales': '€{:.2f}', 'ACOS': '{:.2f}%'}), use_container_width=True)
 
         st.subheader("🔍 Dettaglio Search Terms")
-        waste_terms = df[(df['Sales'] == 0) & (df['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
+        c1, c2 = st.columns(2)
+        sel_camp = c1.selectbox("Filtra Campagna", ["Tutte"] + sorted(df['Campaign'].unique().tolist()))
+        df_terms = df[df['Campaign'] == sel_camp] if sel_camp != "Tutte" else df
+        waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
         # INTEGRAZIONE AI
@@ -355,7 +405,12 @@ def show_ppc_optimizer():
                             genai.configure(api_key=api_key)
                             model = genai.GenerativeModel('gemini-pro')
                             t_list = target_waste['Search Term'].head(150).tolist()
-                            prompt = f"Analizza: {', '.join(t_list)}\nContesto: {prod_ctx}\nTask: Identifica Negative Exact. 3 gruppi (Incoerenti, Affini ma no ordini). Lista pulita."
+                            prompt = f"""
+                            Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
+                            Termini: {', '.join(t_list)}
+                            Contesto Prodotto: {prod_ctx}
+                            Task: Identifica Negative Exact. 3 gruppi (Incoerenti, Affini ma no ordini). Lista pulita.
+                            """
                             resp = model.generate_content(prompt)
                             st.markdown(resp.text)
                         except Exception as e: st.error(f"Errore AI: {e}")
@@ -369,8 +424,11 @@ def show_brand_analytics():
         df = load_data_robust(f)
         if df is None: return
         df = clean_columns(df)
+        
+        # Mappatura case-insensitive
         norm = lambda x: str(x).lower().strip().replace(" ", "_")
         cols = {norm(c): c for c in df.columns}
+        
         def pk(*a): 
             for x in a: 
                 if norm(x) in cols: return cols[norm(x)]
@@ -379,13 +437,13 @@ def show_brand_analytics():
         q = pk("Query di ricerca", "search_query", "Termine di ricerca")
         vol = pk("Volume query di ricerca", "search_query_volume")
         i_tot = pk("Impressioni: conteggio totale", "search_funnel_impressions_total")
-        i_br = pk("Impressioni: numero ASIN", "impressioni_numero_asin")
+        i_br = pk("Impressioni: numero ASIN", "impressioni_numero_asin", "impressioni_conteggio_marchio")
         c_tot = pk("Clic: conteggio totale", "search_funnel_clicks_total")
-        c_br = pk("Clic: numero di ASIN", "clic_numero_asin")
+        c_br = pk("Clic: numero di ASIN", "clic_numero_asin", "clic_conteggio_marchio")
         a_tot = pk("Aggiunte al carrello: conteggio totale", "search_funnel_add_to_carts_total")
-        a_br = pk("Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count")
+        a_br = pk("Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count", "aggiunte_al_carrello_conteggio_marchio")
         b_tot = pk("Acquisti: conteggio totale", "search_funnel_purchases_total")
-        b_br = pk("Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count")
+        b_br = pk("Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count", "acquisti_conteggio_marchio")
 
         if not q: 
             st.error("Colonne non trovate.")
@@ -424,27 +482,27 @@ def show_sqp():
                 if norm(x) in cols: return cols[norm(x)]
             return None
 
-        q = pk("Query di ricerca", "search_query")
-        i_tot = pk("Impressioni_conteggio_totale", "impressions_total")
-        c_tot = pk("Clic_conteggio_totale", "clicks_total")
-        b_tot = pk("Acquisti_conteggio_totale", "purchases_total")
+        q = pk("Query di ricerca", "search_query", "termine_di_ricerca")
+        i_tot = pk("Impressioni_conteggio_totale", "impressions_total", "impressioni_conteggio_totale")
         i_br = pk("Impressioni_conteggio_marchio", "impressions_brand")
-        c_br = pk("Clic_conteggio_marchio", "clicks_brand")
-        b_br = pk("Acquisti_conteggio_marchio", "purchases_brand")
+        c_tot = pk("Clic_conteggio_totale", "clicks_total", "clic_conteggio_totale")
+        c_br = pk("Clic_conteggio_marchio", "clicks_brand", "clic_conteggio_marchio")
+        b_tot = pk("Acquisti_conteggio_totale", "purchases_total", "acquisti_conteggio_totale")
+        b_br = pk("Acquisti_conteggio_marchio", "purchases_brand", "acquisti_conteggio_marchio")
 
         if not q: st.error("Colonne non trovate."); return
         def safe(c): return pd.to_numeric(df[c], errors='coerce').fillna(0) if c else 0
 
         df["CTR MARKET"] = safe(c_tot) / safe(i_tot).replace(0, 1)
-        df["CR MARKET"] = safe(b_tot) / safe(c_tot).replace(0, 1)
         df["CTR MARCHIO"] = safe(c_br) / safe(i_br).replace(0, 1)
+        df["CR MARKET"] = safe(b_tot) / safe(c_tot).replace(0, 1)
         df["CR MARCHIO"] = safe(b_br) / safe(c_br).replace(0, 1)
         
         st.metric("CTR Medio Market", f"{df['CTR MARKET'].mean()*100:.2f}%")
         st.dataframe(df.head(50), use_container_width=True)
         download_excel({"SQP": df}, "sqp_analysis.xlsx")
 
-# --- INVENTARIO FBA (RESTORED FULL LOGIC) ---
+# --- INVENTARIO ---
 def show_inventory():
     st.title("📦 Inventario FBA")
     with st.expander("ℹ️ Guida", expanded=False): st.markdown("**File:** Inventory Ledger.")
@@ -452,123 +510,32 @@ def show_inventory():
     if f:
         df = load_data_robust(f)
         if df is None: return
-        # Clean columns
-        df.columns = (df.columns.str.strip().str.replace("\ufeff", "", regex=False).str.lower())
+        df = clean_columns(df)
+        df.columns = df.columns.str.lower()
         
-        # Filtri
-        if 'date' in df.columns: 
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            # Opzionale: filtri data qui
-        
-        # Colonne numeriche
-        num_cols = [
-            'starting warehouse balance','in transit between warehouses','receipts','customer shipments',
-            'customer returns','vendor returns','warehouse transfer in/out','found','lost',
-            'damaged','disposed','other events','ending warehouse balance','unknown events'
-        ]
-        for c in num_cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-
-        # 1. ANOMALIA DELTA (Calcolo Granulare)
+        # Logica Delta
         if 'ending warehouse balance' in df.columns:
-            # Identificazione colonne presenti
-            present = set(df.columns)
-            inc_cols = [c for c in ['receipts','customer returns','vendor returns','warehouse transfer in/out',
-                                    'found','other events','unknown events'] if c in present]
-            dec_cols = [c for c in ['lost','damaged','disposed'] if c in present]
-            ship_col = 'customer shipments' if 'customer shipments' in present else None
-
-            def shipments_adjust(value):
-                if ship_col is None or pd.isna(value): return 0
-                return value if value < 0 else -abs(value)
-
-            # Iterazione "vecchia scuola" per massima precisione su raggruppamenti
-            key_candidates = [k for k in ['asin','fnsku','msku','location','disposition'] if k in present]
-            if not key_candidates and 'title' in present: key_candidates = ['title']
+            inc = df[['receipts', 'customer returns', 'found']].sum(axis=1) if 'receipts' in df.columns else 0
+            dec = df[['customer shipments', 'lost', 'damaged', 'disposed']].sum(axis=1).abs() if 'lost' in df.columns else 0
+            df['ending_teorico'] = df.get('starting warehouse balance', 0) + inc - dec
+            df['delta'] = df['ending warehouse balance'] - df['ending_teorico']
+            anomalies = df[df['delta'].abs() > 0.1].copy()
+            if not anomalies.empty:
+                st.warning(f"Rilevate {len(anomalies)} anomalie.")
+                st.dataframe(anomalies)
+                download_excel({"Anomalie": anomalies}, "reclami.xlsx")
+            else: st.success("Nessuna anomalia.")
             
-            anomalies_rows = []
-            
-            if key_candidates and 'date' in df.columns:
-                # Ordina per gruppo e data
-                df_calc = df.sort_values(key_candidates + ['date'])
-                
-                # Iterazione per gruppi (logic heavy)
-                for keys, g in df_calc.groupby(key_candidates, dropna=False):
-                    g = g.sort_values('date').copy()
-                    
-                    # Logica Ending Teorico
-                    for idx, row in g.iterrows():
-                        start = row.get('starting warehouse balance', 0)
-                        inc = sum(row.get(c, 0) for c in inc_cols)
-                        dec = sum(row.get(c, 0) for c in dec_cols)
-                        ship = shipments_adjust(row.get(ship_col, 0))
-                        
-                        ending_teorico = start + inc - dec + ship
-                        ending_reale = row.get('ending warehouse balance', 0)
-                        
-                        if abs(ending_reale - ending_teorico) > 0.1:
-                            r_data = row.to_dict()
-                            r_data['Ending Teorico'] = ending_teorico
-                            r_data['Delta'] = ending_reale - ending_teorico
-                            anomalies_rows.append(r_data)
-            
-            if anomalies_rows:
-                df_anom = pd.DataFrame(anomalies_rows)
-                st.warning(f"Rilevate {len(df_anom)} anomalie di magazzino (Delta).")
-                st.dataframe(df_anom)
-                download_excel({"Anomalie Delta": df_anom}, "anomalie_fba.xlsx")
-            else:
-                st.success("Nessuna anomalia di magazzino rilevata.")
-
-        # 2. DISTRIBUTOR DAMAGED (Logica Specifica)
-        if 'damaged' in df.columns and 'date' in df.columns:
-            st.divider()
-            st.subheader("📦 Analisi 'Damaged' in Trasferimento")
-            
-            # Parametri
-            dd_window = 3 # giorni di finestra
-            
-            dd_rows = []
-            dd_keys = [k for k in ['asin','fnsku','msku'] if k in df.columns]
-            
-            if dd_keys:
-                df_sorted = df.sort_values(dd_keys + ['date'])
-                for keys, sub in df_sorted.groupby(dd_keys, dropna=False):
-                    sub = sub.sort_values('date').copy()
-                    
-                    # Logic: Check if damaged happened near a transfer
-                    if 'warehouse transfer in/out' in sub.columns:
-                        sub['transfer_flag'] = sub['warehouse transfer in/out'].fillna(0).abs() > 0
-                    
-                    for idx, r in sub.iterrows():
-                        damaged = r.get('damaged', 0)
-                        if damaged <= 0: continue
-                        
-                        # Se c'è stato un transfer oggi o ieri
-                        is_transfer = r.get('transfer_flag', False)
-                        
-                        if is_transfer:
-                            # Controlla se c'è un "Found" nei giorni successivi (compensazione)
-                            d0 = r['date']
-                            mask_found = (sub['date'] > d0) & (sub['date'] <= d0 + pd.Timedelta(days=dd_window))
-                            found_after = sub.loc[mask_found, 'found'].sum() if 'found' in sub.columns else 0
-                            
-                            refund_units = max(damaged - found_after, 0)
-                            
-                            if refund_units > 0:
-                                row_dd = r.to_dict()
-                                row_dd['Rimborso Stimato (Unità)'] = refund_units
-                                row_dd['Found Compensativo'] = found_after
-                                dd_rows.append(row_dd)
-            
-            if dd_rows:
-                df_dd = pd.DataFrame(dd_rows)
-                st.warning(f"Trovati {len(df_dd)} eventi 'Damaged' potenzialmente rimborsabili.")
-                st.dataframe(df_dd)
-                download_excel({"Damaged Claims": df_dd}, "claims_damaged.xlsx")
-            else:
-                st.info("Nessun evento 'Damaged' sospetto trovato.")
+        # Logica Damaged
+        if 'damaged' in df.columns and 'transaction type' in df.columns:
+             damaged_transfer = df[
+                (df['transaction type'].astype(str).str.lower().str.contains('adjustment')) & 
+                (df['disposition'].isin(['damaged'])) &
+                (df['damaged'] > 0)
+            ].copy()
+             if not damaged_transfer.empty:
+                st.subheader("📦 Unità Danneggiate (Adjustment)")
+                st.dataframe(damaged_transfer)
 
 # --- FUNNEL AUDIT ---
 def show_funnel_audit():
@@ -614,6 +581,9 @@ def show_invoices():
         if df is None: return
         df = clean_columns(df)
         
+        if 'TRANSACTION_TYPE' in df.columns:
+            df = df[df['TRANSACTION_TYPE'].astype(str).str.upper() == 'SALE']
+
         date_col = None
         for c in df.columns:
             if 'DATE' in c.upper() and 'COMPLETE' in c.upper(): date_col = c; break
