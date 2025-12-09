@@ -192,6 +192,7 @@ def process_product_df(df, source_label):
     return products
 
 def get_combined_library():
+    """Unisce tutte le fonti della libreria (JSON, Excel, Google Sheets)."""
     products = []
     
     # 1. JSON (Config)
@@ -228,7 +229,8 @@ def get_combined_library():
 def show_product_library_view():
     st.title("📚 Libreria Prodotti Attiva")
     
-    products = get_combined_library()
+    # Carica la lista completa grezza
+    all_products = get_combined_library()
     
     # Info file
     files_found = []
@@ -242,9 +244,9 @@ def show_product_library_view():
     # Filtro visibilità
     visible_products = []
     if st.session_state['is_admin']:
-        visible_products = products
+        visible_products = all_products
     else:
-        visible_products = [p for p in products if not p.get('private', False)]
+        visible_products = [p for p in all_products if not p.get('private', False)]
 
     if not visible_products:
         st.info("Nessun prodotto disponibile.")
@@ -277,7 +279,7 @@ def show_ppc_optimizer():
 
     c1, c2, c3 = st.columns(3)
     acos_target = c1.number_input("🎯 ACOS Target (%)", min_value=1, value=30)
-    click_min = c2.number_input("⚠️ Click min (no vendite)", min_value=1, value=10) # FIX: Min value 1
+    click_min = c2.number_input("⚠️ Click min (no vendite)", min_value=1, value=10)
     percent_threshold = c3.number_input("📊 % Spesa critica", min_value=1, value=10)
 
     if search_term_file:
@@ -343,7 +345,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) - FIX MODELLI
+        # INTEGRAZIONE AI (GEMINI) - FIXATA
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -388,30 +390,25 @@ def show_ppc_optimizer():
                             genai.configure(api_key=api_key)
                             
                             # --- SELEZIONE MODELLO AUTOMATICA (FIX) ---
-                            # Lista basata sui modelli disponibili nel tuo account
-                            candidates = [
-                                'gemini-flash-latest',
-                                'gemini-2.5-flash',
-                                'gemini-2.0-flash',
-                                'gemini-pro-latest',
+                            candidate_models = [
                                 'gemini-1.5-flash',
-                                'gemini-1.5-pro'
+                                'gemini-1.5-flash-latest',
+                                'gemini-1.5-pro',
+                                'gemini-pro',
+                                'models/gemini-1.5-flash',
+                                'models/gemini-pro'
                             ]
                             
                             model = None
-                            for m in candidates:
+                            for m in candidate_models:
                                 try:
-                                    # Prova a istanziare
                                     temp_model = genai.GenerativeModel(m)
-                                    # Test rapido di validità
-                                    # Nota: non facciamo una chiamata reale per risparmiare tempo, ci fidiamo dell'istanziazione
+                                    temp_model.generate_content("test")
                                     model = temp_model
-                                    # st.toast(f"Usando modello: {m}") # Debug opzionale
                                     break
                                 except: continue
                                 
                             if model is None:
-                                # Fallback estremo
                                 model = genai.GenerativeModel('gemini-pro')
 
                             t_list = target_waste['Search Term'].head(150).tolist()
@@ -652,12 +649,13 @@ def main():
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
                     st.success("Login effettuato con successo! ✅")
-                    st.rerun() # Ricarica per aggiornare stato
+                    st.rerun() # Reload per aggiornare stato
                 else:
                     st.warning("Password errata ❌")
         
-        # Feedback Logout
+        # Feedback Login
         if st.session_state.get('is_admin'):
+            st.success("Login effettuato con successo! ✅")
             if st.button("Logout"): 
                 st.session_state['is_admin'] = False
                 st.rerun()
@@ -668,8 +666,8 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library_view(None) 
-    elif sel == "PPC Optimizer": show_ppc_optimizer(None)
+    elif sel == "Libreria Prodotti": show_product_library_view() # Nessun argomento
+    elif sel == "PPC Optimizer": show_ppc_optimizer() # Nessun argomento
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
     elif sel == "Generazione Corrispettivi": show_invoices()
