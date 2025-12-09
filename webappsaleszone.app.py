@@ -379,8 +379,17 @@ def show_ppc_optimizer():
                     with st.spinner("Analisi in corso..."):
                         try:
                             genai.configure(api_key=api_key)
-                            # FIX MODELLO
-                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            
+                            # TENTATIVO ROBUSTO CON FALLBACK
+                            # Proviamo prima Flash, poi Pro se fallisce
+                            try:
+                                model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                                # Piccolo test per vedere se risponde
+                                model.generate_content("test")
+                            except:
+                                # Fallback su Pro
+                                model = genai.GenerativeModel('gemini-pro')
+                                
                             t_list = target_waste['Search Term'].head(150).tolist()
                             prompt = f"""
                             Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
@@ -644,4 +653,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
