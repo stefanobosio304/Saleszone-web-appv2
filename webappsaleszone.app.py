@@ -343,7 +343,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) - PROMPT AGGIORNATO E ANTI-ALLUCINAZIONE
+        # INTEGRAZIONE AI (GEMINI) - PROMPT RIGIDO E CLEAN
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -387,16 +387,11 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # --- SELEZIONE MODELLO DINAMICA ---
+                            # SELEZIONE MODELLO DINAMICA
                             candidate_models = [
-                                'gemini-1.5-flash',
-                                'gemini-1.5-flash-latest',
-                                'gemini-1.5-pro',
-                                'gemini-pro',
-                                'models/gemini-1.5-flash',
-                                'models/gemini-pro'
+                                'gemini-1.5-flash-latest', 'gemini-1.5-flash', 
+                                'gemini-1.5-pro', 'gemini-pro'
                             ]
-                            
                             model = None
                             for m in candidate_models:
                                 try:
@@ -406,12 +401,12 @@ def show_ppc_optimizer():
                                     break
                                 except: continue
                             
-                            if model is None:
-                                model = genai.GenerativeModel('gemini-pro')
+                            if model is None: model = genai.GenerativeModel('gemini-pro')
 
+                            # LISTA TERMINI
                             t_list = target_waste['Search Term'].head(150).tolist()
                             
-                            # PROMPT RIGIDO E STRUTTURATO
+                            # PROMPT "BLINDATO"
                             prompt = f"""
                             Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
                             NON INVENTARE O SUGGERIRE TERMINI NON PRESENTI NELLA LISTA.
@@ -426,15 +421,15 @@ def show_ppc_optimizer():
                             
                             Output richiesto in due parti:
                             
-                            PARTE 1: Analisi
+                            ### 1. ANALISI
                             Dividi i termini selezionati in 3 gruppi con breve motivazione:
-                            1. Completamente Incoerenti
-                            2. Incoerenti ma con affinità
-                            3. Affini ma senza conversioni
+                            - Completamente Incoerenti
+                            - Incoerenti ma con affinità
+                            - Affini ma senza conversioni
                             
-                            PARTE 2: LISTA PRONTA PER COPIA-INCOLLA
-                            Scrivi SOLO l'elenco dei termini da negativizzare (quelli identificati sopra), uno per riga, senza elenchi puntati, senza parentesi, senza numeri, senza spiegazioni.
-                            Solo il testo nudo e crudo pronto per essere incollato in Seller Central.
+                            ### 2. LISTA PRONTA PER COPIA-INCOLLA
+                            Scrivi qui sotto SOLO l'elenco dei termini da negativizzare (quelli identificati sopra), uno per riga.
+                            Nessun punto elenco, nessuna numerazione, nessuna parentesi. Solo il testo del termine.
                             """
                             resp = model.generate_content(prompt)
                             st.markdown(resp.text)
