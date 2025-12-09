@@ -387,10 +387,12 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # SELEZIONE MODELLO DINAMICA
+                            # --- SELEZIONE MODELLO DINAMICA ---
                             candidate_models = [
                                 'gemini-1.5-flash-latest', 'gemini-1.5-flash', 
-                                'gemini-1.5-pro', 'gemini-pro'
+                                'gemini-1.5-pro', 'gemini-pro',
+                                'models/gemini-1.5-flash',
+                                'models/gemini-pro'
                             ]
                             model = None
                             for m in candidate_models:
@@ -406,10 +408,12 @@ def show_ppc_optimizer():
                             # LISTA TERMINI
                             t_list = target_waste['Search Term'].head(150).tolist()
                             
-                            # PROMPT "BLINDATO"
+                            # PROMPT "BLINDATO" E FORMATTATO
                             prompt = f"""
                             Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
-                            NON INVENTARE O SUGGERIRE TERMINI NON PRESENTI NELLA LISTA.
+                            
+                            **REGOLA N.1: NON INVENTARE TERMINI.**
+                            Analizza SOLO e SOLTANTO le parole presenti nella lista 'Termini da analizzare'. Se un termine non è nella lista, NON scriverlo nel report.
                             
                             Termini da analizzare (Senza vendite):
                             {', '.join(t_list)}
@@ -419,7 +423,7 @@ def show_ppc_optimizer():
                             
                             Task: Identifica tra i termini forniti quali inserire in 'Corrispondenza Negativa Esatta'.
                             
-                            Output richiesto in due parti:
+                            Output richiesto in due parti ben distinte:
                             
                             ### 1. ANALISI
                             Dividi i termini selezionati in 3 gruppi con breve motivazione:
@@ -429,7 +433,7 @@ def show_ppc_optimizer():
                             
                             ### 2. LISTA PRONTA PER COPIA-INCOLLA
                             Scrivi qui sotto SOLO l'elenco dei termini da negativizzare (quelli identificati sopra), uno per riga.
-                            Nessun punto elenco, nessuna numerazione, nessuna parentesi. Solo il testo del termine.
+                            Nessun punto elenco, nessuna numerazione, nessuna parentesi, nessuna intestazione. Solo il testo del termine.
                             """
                             resp = model.generate_content(prompt)
                             st.markdown(resp.text)
