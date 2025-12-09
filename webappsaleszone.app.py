@@ -151,44 +151,39 @@ def download_excel(dfs_dict, filename):
     except Exception as e: st.error(f"Errore download: {e}")
 
 # ==============================================================================
-# GESTIONE LIBRERIA AVANZATA (CON LOGICA PRIVACY EXCEL)
+# GESTIONE LIBRERIA AVANZATA (AUTO-LOAD)
 # ==============================================================================
 def process_product_df(df, source_label):
     """Converte un DataFrame prodotti in una lista di dizionari standard."""
     products = []
     if df is not None:
-        df.columns = df.columns.str.lower().str.strip()
-        
-        # Mappatura colonne flessibile
+        df.columns = df.columns.str.lower()
         col_asin = next((c for c in df.columns if 'asin' in c), None)
         col_name = next((c for c in df.columns if 'nome' in c or 'name' in c or 'prodotto' in c), None)
         col_brand = next((c for c in df.columns if 'brand' in c or 'marca' in c), None)
         col_context = next((c for c in df.columns if 'contesto' in c or 'context' in c or 'descri' in c or 'testo' in c), None)
-        col_private = next((c for c in df.columns if 'privato' in c or 'private' in c or 'riservato' in c), None)
         
         if col_asin and col_name:
             for _, row in df.iterrows():
-                # Gestione Privacy da Excel
-                is_private = False
-                if col_private:
-                    val = str(row[col_private]).strip().lower()
-                    if val in ['sì', 'si', 'yes', 'true', 'vero', '1']:
-                        is_private = True
-                
                 products.append({
                     "brand": str(row[col_brand]) if col_brand else "Generico",
                     "asin": str(row[col_asin]).strip(),
                     "name": str(row[col_name]),
                     "context": str(row[col_context]) if col_context else "",
-                    "source": source_label,
-                    "private": is_private
+                    "source": source_label
                 })
     return products
 
-def get_combined_library(uploaded_lib_file=None):
+def get_combined_library():
+    """
+    Unisce:
+    1. library.json (File Config)
+    2. my_products.xlsx (File Excel nel repo - AUTO LOAD)
+    3. GOOGLE SHEETS (Secrets)
+    """
     products = []
     
-    # 1. JSON (Config)
+    # 1. Carica JSON (Configurazione Base)
     if os.path.exists("library.json"):
         try:
             with open("library.json", "r") as f:
@@ -197,7 +192,7 @@ def get_combined_library(uploaded_lib_file=None):
                 products.extend(js_prods)
         except: pass
     
-    # 2. EXCEL LOCALE (Auto)
+    # 2. AUTO-LOAD: Cerca 'my_products.xlsx' nel repository GitHub
     if os.path.exists("my_products.xlsx"):
         try:
             df_auto = pd.read_excel("my_products.xlsx")
@@ -211,15 +206,6 @@ def get_combined_library(uploaded_lib_file=None):
             df_gs = pd.read_csv(sheet_url)
             products.extend(process_product_df(df_gs, "☁️ Google Sheets"))
         except Exception: pass
-
-    # 4. UPLOAD MANUALE
-    if uploaded_lib_file:
-        df_manual = load_data_robust(uploaded_lib_file)
-        new_prods = process_product_df(df_manual, "👤 Upload")
-        existing_asins = [p['asin'] for p in products]
-        for p in new_prods:
-            if p['asin'] not in existing_asins:
-                products.append(p)
     
     return products
 
@@ -228,59 +214,49 @@ def get_combined_library(uploaded_lib_file=None):
 # ==============================================================================
 
 # --- LIBRERIA PRODOTTI ---
-def show_product_library_view(lib_file):
+def show_product_library_view():
     st.title("📚 Libreria Prodotti Attiva")
     
-    # Carica la lista completa grezza
-    all_products = get_combined_library(lib_file)
+    products = get_combined_library()
     
-    # Filtra in base ai permessi Admin
-    visible_products = []
-    if st.session_state['is_admin']:
-        visible_products = all_products
-    else:
-        # Se non è admin, mostra solo i prodotti NON privati
-        for p in all_products:
-            if not p.get('private', False):
-                visible_products.append(p)
+    # Info file
+    files_found = []
+    if os.path.exists("library.json"): files_found.append("library.json")
+    if os.path.exists("my_products.xlsx"): files_found.append("my_products.xlsx (Auto-caricato)")
+    if "GOOGLE_SHEET_URL" in st.secrets: files_found.append("Google Sheets")
     
-    # Info fonti
-    sources = []
-    if os.path.exists("library.json"): sources.append("library.json")
-    if os.path.exists("my_products.xlsx"): sources.append("my_products.xlsx")
-    if "GOOGLE_SHEET_URL" in st.secrets: sources.append("Google Sheets")
-    if lib_file: sources.append("Upload Manuale")
+    if files_found:
+        st.success(f"Fonti dati connesse: {', '.join(files_found)}")
     
-    if sources: st.success(f"Fonti dati connesse: {', '.join(sources)}")
-    
-    if not visible_products:
+    if not products:
         st.info("Nessun prodotto disponibile.")
         st.markdown("""
-        **Come creare il file Excel per la Libreria:**
-        1. Crea colonne: `Brand`, `ASIN`, `Nome`, `Contesto`, **`Privato`**.
-        2. Nella colonna `Privato` scrivi "Sì" per nascondere il prodotto agli ospiti.
-        3. Caricalo qui sotto o su GitHub come `my_products.xlsx`.
+        **Come attivare il caricamento automatico:**
+        1. Crea un file Excel con le colonne: `ASIN`, `Nome`, `Brand`, `Contesto`.
+        2. Chiamalo esattamente **`my_products.xlsx`**.
+        3. Caricalo nel tuo repository GitHub insieme a `app.py`.
+        4. L'app lo leggerà automaticamente ad ogni avvio!
         """)
     else:
-        st.metric("Prodotti Visibili", len(visible_products))
+        st.metric("Totale Prodotti", len(products))
         
-        all_brands = sorted(list(set([p['brand'] for p in visible_products])))
+        all_brands = sorted(list(set([p['brand'] for p in products])))
         sel_brand = st.selectbox("Filtra per Brand", ["Tutti"] + all_brands)
         
         display_data = []
-        for p in visible_products:
+        for p in products:
             if sel_brand == "Tutti" or p['brand'] == sel_brand:
                 display_data.append({
                     "Fonte": p.get('source', '?'),
                     "Brand": p['brand'],
                     "ASIN": p['asin'],
                     "Nome": p['name'],
-                    "Visibilità": "🔒 Privato" if p.get('private') else "🌍 Pubblico"
+                    "Contesto (Anteprima)": p.get('context', '')[:50] + "..."
                 })
         st.dataframe(pd.DataFrame(display_data), use_container_width=True)
 
 # --- PPC OPTIMIZER ---
-def show_ppc_optimizer(lib_file):
+def show_ppc_optimizer():
     st.title("📊 Saleszone Ads Optimizer")
     with st.expander("ℹ️ Guida all'uso: PPC Optimizer", expanded=False):
         st.markdown("**File richiesto:** Report Termini di Ricerca (Sponsored Products).")
@@ -378,7 +354,7 @@ def show_ppc_optimizer(lib_file):
             
             if use_lib:
                 # Carica la libreria (Comune + Personale)
-                all_products = get_combined_library(lib_file)
+                all_products = get_combined_library()
                 
                 # Filtra per Admin/Ospite
                 valid_products = []
@@ -639,19 +615,16 @@ def main():
             k = st.text_input("Gemini API Key", type="password")
             if k: st.session_state['gemini_api_key'] = k
         
-        # 📂 LIBRERIA PERSONALE (UPLOAD FILE)
-        st.markdown("### 📂 Libreria Personale")
-        uploaded_lib = st.file_uploader("Carica file Prodotti (Excel)", type=['xlsx', 'xls'], help="Carica il tuo file Excel con i prodotti privati.")
-        
         # ADMIN LOGIN
         with st.expander("Admin Area"):
             pwd = st.text_input("Password", type="password")
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
-                    st.success("Login OK")
+                    st.success("Login effettuato con successo! ✅")
                     st.rerun()
-                else: st.error("Errore")
+                else:
+                    st.warning("Password errata ❌")
         
         if st.session_state.get('is_admin'):
             if st.button("Logout"): 
@@ -664,8 +637,8 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library_view(uploaded_lib)
-    elif sel == "PPC Optimizer": show_ppc_optimizer(uploaded_lib)
+    elif sel == "Libreria Prodotti": show_product_library_view()
+    elif sel == "PPC Optimizer": show_ppc_optimizer()
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
     elif sel == "Generazione Corrispettivi": show_invoices()
