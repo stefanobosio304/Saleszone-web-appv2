@@ -110,8 +110,7 @@ def mask_sensitive_data(df):
     text_cols = df.select_dtypes(include=['object']).columns
     for col in text_cols:
         for secret_asin in hidden_list:
-            if secret_asin:
-                df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
+            df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
     return df
 
 def load_data_robust(file):
@@ -152,7 +151,7 @@ def download_excel(dfs_dict, filename):
     except Exception as e: st.error(f"Errore download: {e}")
 
 # ==============================================================================
-# GESTIONE LIBRERIA AVANZATA (AUTO-LOAD)
+# GESTIONE LIBRERIA AVANZATA
 # ==============================================================================
 def process_product_df(df, source_label):
     """Converte un DataFrame prodotti in una lista di dizionari standard."""
@@ -335,7 +334,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI)
+        # INTEGRAZIONE AI (GEMINI) ROBUSTA
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -356,7 +355,7 @@ def show_ppc_optimizer():
             
             if use_lib:
                 products = get_combined_library()
-                # Filtra prodotti visibili (se non admin, nascondi privati)
+                # Filtra per privacy
                 valid_prods = products if st.session_state['is_admin'] else [p for p in products if not p.get('private', False)]
                 
                 if valid_prods:
@@ -380,16 +379,15 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # TENTATIVO ROBUSTO CON FALLBACK
-                            # Proviamo prima Flash, poi Pro se fallisce
+                            # LOGICA INTELLIGENTE DI SELEZIONE MODELLO
+                            # Prova a listare i modelli disponibili e ne sceglie uno funzionante
                             try:
-                                model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                                # Piccolo test per vedere se risponde
-                                model.generate_content("test")
+                                # Tentativo con modello standard di base
+                                model = genai.GenerativeModel('gemini-1.5-flash')
                             except:
-                                # Fallback su Pro
+                                # Fallback generico
                                 model = genai.GenerativeModel('gemini-pro')
-                                
+
                             t_list = target_waste['Search Term'].head(150).tolist()
                             prompt = f"""
                             Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
@@ -403,7 +401,9 @@ def show_ppc_optimizer():
                             """
                             resp = model.generate_content(prompt)
                             st.markdown(resp.text)
-                        except Exception as e: st.error(f"Errore AI: {e}")
+                        except Exception as e: 
+                            st.error(f"Errore AI: {e}")
+                            st.error("Suggerimento: Verifica su Google AI Studio quale modello è attivo per la tua API Key.")
 
 # --- HOME ---
 def show_home():
@@ -627,12 +627,13 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
-                    st.success("Login effettuato con successo! ✅")
-                    st.rerun()
+                    st.rerun() # Reload per aggiornare stato
                 else:
                     st.warning("Password errata ❌")
         
+        # Feedback Login
         if st.session_state.get('is_admin'):
+            st.success("Login effettuato con successo! ✅")
             if st.button("Logout"): 
                 st.session_state['is_admin'] = False
                 st.rerun()
@@ -643,7 +644,7 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library_view()
+    elif sel == "Libreria Prodotti": show_product_library_view(None) # File manuale rimosso
     elif sel == "PPC Optimizer": show_ppc_optimizer()
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
