@@ -343,7 +343,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI)
+        # INTEGRAZIONE AI (GEMINI) - PROMPT PULITO E SEPARAZIONE ASIN
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -407,39 +407,42 @@ def show_ppc_optimizer():
 
                             t_list = target_waste['Search Term'].head(150).tolist()
                             
-                            # PROMPT RIGIDO E STRUTTURATO (4 GRUPPI ESPLICITI)
+                            # PROMPT RIGIDISSIMO PER OUTPUT PULITO E ASIN SEPARATI
                             prompt = f"""
-                            Sei un esperto Amazon PPC. Il tuo compito è analizzare la lista dei 'Termini' fornita.
+                            Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
+                            NON INVENTARE O SUGGERIRE TERMINI NON PRESENTI NELLA LISTA.
                             
-                            INPUT:
-                            Termini (Senza vendite): {', '.join(t_list)}
-                            Contesto Prodotto: {prod_ctx}
+                            Termini da analizzare (Senza vendite):
+                            {', '.join(t_list)}
                             
-                            ISTRUZIONI RIGIDE:
-                            1. Analizza SOLO i termini presenti nella lista input. NON INVENTARE.
-                            2. Dividi i termini da negativizzare in 4 gruppi esatti.
-                            3. Per la sezione "LISTE DA COPIARE", restituisci SOLO il testo del termine, uno per riga. Niente numeri, niente punti, niente spiegazioni in quella sezione.
+                            Contesto Prodotto:
+                            {prod_ctx}
                             
-                            OUTPUT RICHIESTO:
+                            Task: Identifica tra i termini forniti quali inserire in 'Corrispondenza Negativa Esatta'.
                             
-                            ### 🧠 ANALISI (Spiegazione)
-                            *Qui elenca i termini divisi nei 4 gruppi con una breve spiegazione del perché.*
+                            **ISTRUZIONI DI FORMATTAZIONE:**
+                            Per la sezione "LISTA PRONTA PER COPIA-INCOLLA", restituisci SOLO i termini.
+                            NIENTE numeri, NIENTE punti elenco, NIENTE parentesi, NIENTE spiegazioni.
+                            UNO PER RIGA.
                             
-                            ---
+                            OUTPUT RICHIESTO IN DUE PARTI:
                             
-                            ### 📋 LISTE DA COPIARE (Solo Termini)
+                            --- PARTE 1: ANALISI ---
+                            Spiega brevemente perché hai scelto questi gruppi.
                             
-                            **Gruppo 1: ASIN**
-                            (Qui incolla solo gli ASIN trovati nella lista, uno per riga. Riconoscili perché iniziano con b0 o B0)
+                            --- PARTE 2: LISTA PRONTA PER COPIA-INCOLLA ---
                             
-                            **Gruppo 2: Completamente Incoerenti**
-                            (Qui incolla solo i termini incoerenti, uno per riga, no elenchi puntati)
+                            **GRUPPO 1: ASIN**
+                            (Incolla qui sotto solo i codici ASIN trovati nella lista input, quelli che iniziano con b0 o B0)
                             
-                            **Gruppo 3: Incoerenti ma con affinità**
-                            (Qui incolla solo i termini di questo gruppo, uno per riga, no elenchi puntati)
+                            **GRUPPO 2: COMPLETAMENTE INCOERENTI**
+                            (Incolla qui sotto i termini incoerenti, uno per riga, testo puro)
                             
-                            **Gruppo 4: Affini ma senza conversioni**
-                            (Qui incolla solo i termini di questo gruppo, uno per riga, no elenchi puntati)
+                            **GRUPPO 3: INCOERENTI MA CON AFFINITÀ**
+                            (Incolla qui sotto i termini di questo gruppo, uno per riga, testo puro)
+                            
+                            **GRUPPO 4: AFFINI MA SENZA CONVERSIONI**
+                            (Incolla qui sotto i termini di questo gruppo, uno per riga, testo puro)
                             """
                             resp = model.generate_content(prompt)
                             st.markdown(resp.text)
