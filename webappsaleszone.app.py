@@ -163,7 +163,6 @@ def download_excel(dfs_dict, filename):
 # GESTIONE LIBRERIA AVANZATA (AUTO-LOAD)
 # ==============================================================================
 def process_product_df(df, source_label):
-    """Converte un DataFrame prodotti in una lista di dizionari standard."""
     products = []
     if df is not None:
         df.columns = df.columns.str.lower()
@@ -194,7 +193,6 @@ def process_product_df(df, source_label):
 def get_combined_library():
     products = []
     
-    # 1. JSON (Config)
     if os.path.exists("library.json"):
         try:
             with open("library.json", "r") as f:
@@ -203,14 +201,12 @@ def get_combined_library():
                 products.extend(js_prods)
         except: pass
     
-    # 2. EXCEL LOCALE (Auto)
     if os.path.exists("my_products.xlsx"):
         try:
             df_auto = pd.read_excel("my_products.xlsx")
             products.extend(process_product_df(df_auto, "📂 Repo (Auto)"))
         except Exception: pass
 
-    # 3. GOOGLE SHEETS
     if "GOOGLE_SHEET_URL" in st.secrets:
         try:
             sheet_url = st.secrets["GOOGLE_SHEET_URL"]
@@ -230,7 +226,6 @@ def show_product_library_view():
     
     products = get_combined_library()
     
-    # Info file
     files_found = []
     if os.path.exists("library.json"): files_found.append("library.json")
     if os.path.exists("my_products.xlsx"): files_found.append("my_products.xlsx (Auto-caricato)")
@@ -239,7 +234,6 @@ def show_product_library_view():
     if files_found:
         st.success(f"Fonti dati connesse: {', '.join(files_found)}")
     
-    # Filtro visibilità
     visible_products = []
     if st.session_state['is_admin']:
         visible_products = products
@@ -343,7 +337,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) - PROMPT AGGIORNATO E OUTPUT PULITO
+        # INTEGRAZIONE AI (GEMINI) - FIXATA E ROBUSTA
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -387,63 +381,81 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # --- SELEZIONE MODELLO DINAMICA ---
-                            candidate_models = [
-                                'gemini-1.5-flash-latest', 'gemini-1.5-flash', 
-                                'gemini-1.5-pro', 'gemini-pro',
-                                'models/gemini-1.5-flash',
-                                'models/gemini-pro'
-                            ]
-                            model = None
-                            for m in candidate_models:
-                                try:
-                                    temp_model = genai.GenerativeModel(m)
-                                    temp_model.generate_content("test")
-                                    model = temp_model
-                                    break
-                                except: continue
+                            # --- LOGICA INFALLIBILE SELEZIONE MODELLO ---
+                            active_model = None
                             
-                            if model is None:
-                                model = genai.GenerativeModel('gemini-pro')
+                            # 1. Chiede a Google quali modelli sono disponibili per la chiave
+                            try:
+                                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                            except:
+                                available_models = []
 
-                            t_list = target_waste['Search Term'].head(150).tolist()
+                            # 2. Cerca modelli preferiti nella lista reale
+                            priorities = ['flash', 'pro', '1.5', '1.0'] # Parole chiave da cercare
                             
-                            # PROMPT SUPER RIGIDO PER FORMATTAZIONE COPY-PASTE
-                            prompt = f"""
-                            Sei un esperto Amazon PPC. Il tuo compito è analizzare la lista dei termini fornita.
+                            # Cerca il primo modello che contiene "flash", poi "pro", ecc.
+                            for p in priorities:
+                                found = next((m for m in available_models if p in m), None)
+                                if found:
+                                    active_model = genai.GenerativeModel(found)
+                                    # st.toast(f"Modello trovato: {found}") # Debug
+                                    break
                             
-                            INPUT:
-                            Termini (Senza vendite): {', '.join(t_list)}
-                            Contesto Prodotto: {prod_ctx}
-                            
-                            ISTRUZIONI RIGIDE:
-                            1. Analizza SOLO i termini presenti nella lista input. NON INVENTARE.
-                            2. Dividi i termini da negativizzare in 4 gruppi esatti.
-                            3. Per la sezione "LISTE DA COPIARE", restituisci SOLO il testo del termine, uno per riga. Niente numeri, niente punti, niente spiegazioni in quella sezione.
-                            
-                            OUTPUT RICHIESTO:
-                            
-                            ### 🧠 ANALISI (Spiegazione)
-                            *Qui elenca i termini divisi nei 4 gruppi con una breve spiegazione del perché.*
-                            
-                            ---
-                            
-                            ### 📋 LISTE DA COPIARE (Solo Termini)
-                            
-                            **Gruppo 1: ASIN (Concorrenti/Prodotti)**
-                            (Qui incolla solo gli ASIN trovati nella lista, uno per riga)
-                            
-                            **Gruppo 2: Completamente Incoerenti**
-                            (Qui incolla solo i termini incoerenti, uno per riga)
-                            
-                            **Gruppo 3: Incoerenti ma con affinità**
-                            (Qui incolla solo i termini di questo gruppo, uno per riga)
-                            
-                            **Gruppo 4: Affini ma senza conversioni**
-                            (Qui incolla solo i termini di questo gruppo, uno per riga)
-                            """
-                            resp = model.generate_content(prompt)
-                            st.markdown(resp.text)
+                            # 3. Se non trova nulla con la logica sopra, prova quelli standard
+                            if not active_model:
+                                fallback_list = ['models/gemini-1.5-flash', 'models/gemini-pro', 'gemini-pro']
+                                for m in fallback_list:
+                                    try:
+                                        temp = genai.GenerativeModel(m)
+                                        temp.generate_content("test")
+                                        active_model = temp
+                                        break
+                                    except: continue
+
+                            if active_model:
+                                t_list = target_waste['Search Term'].head(150).tolist()
+                                
+                                prompt = f"""
+                                Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita.
+                                NON inventare termini non presenti.
+                                
+                                Termini (Senza vendite): {', '.join(t_list)}
+                                Contesto Prodotto: {prod_ctx}
+                                
+                                Dividi i termini in 4 gruppi per l'analisi e poi fornisci una LISTA PRONTA PER COPIA-INCOLLA.
+                                
+                                Gruppo 1: ASIN (codici che iniziano con B0)
+                                Gruppo 2: Completamente Incoerenti
+                                Gruppo 3: Incoerenti ma con affinità
+                                Gruppo 4: Affini ma senza conversioni
+                                
+                                OUTPUT RICHIESTO:
+                                
+                                ### 🧠 ANALISI
+                                (Qui scrivi l'analisi discorsiva divisa nei 4 gruppi con spiegazioni)
+                                
+                                ---
+                                
+                                ### 📋 READY TO COPY (Lista pulita)
+                                
+                                **Gruppo 1: ASIN**
+                                (Solo codici ASIN, uno per riga)
+                                
+                                **Gruppo 2: Completamente Incoerenti**
+                                (Solo termini, uno per riga, no elenchi puntati)
+                                
+                                **Gruppo 3: Incoerenti ma con affinità**
+                                (Solo termini, uno per riga, no elenchi puntati)
+                                
+                                **Gruppo 4: Affini ma senza conversioni**
+                                (Solo termini, uno per riga, no elenchi puntati)
+                                """
+                                
+                                resp = active_model.generate_content(prompt)
+                                st.markdown(resp.text)
+                            else:
+                                st.error("Errore critico: Nessun modello Gemini abilitato per questa chiave API.")
+
                         except Exception as e: st.error(f"Errore AI: {e}")
 
 # --- HOME ---
@@ -668,6 +680,7 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
+                    st.success("Login effettuato con successo! ✅")
                     st.rerun() 
                 else:
                     st.warning("Password errata ❌")
