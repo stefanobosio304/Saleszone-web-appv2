@@ -100,32 +100,6 @@ def get_img_as_base64(file):
         return base64.b64encode(data).decode()
     except: return None
 
-def load_product_library():
-    all_products = []
-    # 1. Carica da Secrets (Permanent)
-    if "PRODUCT_LIBRARY_JSON" in st.secrets:
-        try:
-            raw_data = st.secrets["PRODUCT_LIBRARY_JSON"]
-            saved_products = json.loads(raw_data)
-            all_products.extend(saved_products)
-        except Exception: pass
-
-    # 2. Carica da Session State (Temporary)
-    if 'temp_library' in st.session_state:
-        secret_asins = [p['asin'] for p in all_products]
-        for temp_p in st.session_state['temp_library']:
-            if temp_p['asin'] not in secret_asins:
-                all_products.append(temp_p)
-    
-    # 3. Filtro Privacy
-    if not st.session_state['is_admin']:
-        visible_products = []
-        for p in all_products:
-            if not p.get('private', False):
-                visible_products.append(p)
-        return visible_products
-    return all_products
-
 def mask_sensitive_data(df):
     if df is None or st.session_state.get('is_admin', False): return df
     hidden_list = []
@@ -140,68 +114,31 @@ def mask_sensitive_data(df):
     return df
 
 def load_data_robust(file):
-    """
-    Funzione di caricamento potenziata:
-    - Rileva automaticamente se la prima riga è metadata (es. Marchio=...)
-    - Prova vari separatori (virgola, punto e virgola)
-    - Prova vari encoding (utf-8, latin1)
-    """
     if file is None: return None
     df = None
     try:
-        # GESTIONE EXCEL
         if file.name.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(file, engine='openpyxl')
-        
-        # GESTIONE CSV AVANZATA
         elif file.name.endswith('.csv'):
-            # Legge le prime righe come testo per capire la struttura
             content = file.getvalue().decode('utf-8', errors='ignore')
-            lines = content.splitlines()
-            
-            # Cerca di capire dove iniziano i dati
-            header_row = 0
-            if len(lines) > 0:
-                first_line = lines[0]
-                # Se la prima riga contiene metadati Amazon tipici
-                if "Marchio=" in first_line or "Periodo" in first_line:
-                    header_row = 1
-            
-            # Reset del puntatore file
+            first_line = content.split('\n')[0]
+            skip_rows = 1 if ("Marchio=" in first_line or "Periodo" in first_line) else 0
             file.seek(0)
-            
-            # Tentativi di lettura
-            separators = [',', ';', '\t']
-            encodings = ['utf-8', 'latin1']
-            
-            for enc in encodings:
-                for sep in separators:
-                    try:
-                        file.seek(0)
-                        temp_df = pd.read_csv(file, sep=sep, encoding=enc, header=header_row)
-                        # Se ha letto più di 1 colonna, probabilmente è il formato giusto
-                        if temp_df.shape[1] > 1:
-                            df = temp_df
-                            break
-                    except:
-                        continue
-                if df is not None:
-                    break
-                    
+            try: df = pd.read_csv(file, encoding='utf-8', skiprows=skip_rows)
+            except: 
+                file.seek(0)
+                try: df = pd.read_csv(file, sep=';', encoding='utf-8', skiprows=skip_rows)
+                except:
+                    file.seek(0)
+                    df = pd.read_csv(file, sep=';', encoding='latin1', skiprows=skip_rows)
     except Exception as e:
         st.error(f"Errore lettura file: {e}")
         return None
-    
-    if df is not None: 
-        # Pulisce i nomi delle colonne da spazi e virgolette extra
-        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
-        df = mask_sensitive_data(df)
-        
+    if df is not None: df = mask_sensitive_data(df)
     return df
 
 def clean_columns(df):
-    if df is not None: 
-        df.columns = df.columns.str.strip().str.replace("\ufeff", "")
+    if df is not None: df.columns = df.columns.str.strip().str.replace("\ufeff", "")
     return df
 
 def download_excel(dfs_dict, filename):
@@ -214,93 +151,148 @@ def download_excel(dfs_dict, filename):
     except Exception as e: st.error(f"Errore download: {e}")
 
 # ==============================================================================
+# GESTIONE LIBRERIA AVANZATA (CON LOGICA PRIVACY EXCEL)
+# ==============================================================================
+def process_product_df(df, source_label):
+    """Converte un DataFrame prodotti in una lista di dizionari standard."""
+    products = []
+    if df is not None:
+        df.columns = df.columns.str.lower().str.strip()
+        
+        # Mappatura colonne flessibile
+        col_asin = next((c for c in df.columns if 'asin' in c), None)
+        col_name = next((c for c in df.columns if 'nome' in c or 'name' in c or 'prodotto' in c), None)
+        col_brand = next((c for c in df.columns if 'brand' in c or 'marca' in c), None)
+        col_context = next((c for c in df.columns if 'contesto' in c or 'context' in c or 'descri' in c or 'testo' in c), None)
+        col_private = next((c for c in df.columns if 'privato' in c or 'private' in c or 'riservato' in c), None)
+        
+        if col_asin and col_name:
+            for _, row in df.iterrows():
+                # Gestione Privacy da Excel
+                is_private = False
+                if col_private:
+                    val = str(row[col_private]).strip().lower()
+                    if val in ['sì', 'si', 'yes', 'true', 'vero', '1']:
+                        is_private = True
+                
+                products.append({
+                    "brand": str(row[col_brand]) if col_brand else "Generico",
+                    "asin": str(row[col_asin]).strip(),
+                    "name": str(row[col_name]),
+                    "context": str(row[col_context]) if col_context else "",
+                    "source": source_label,
+                    "private": is_private
+                })
+    return products
+
+def get_combined_library(uploaded_lib_file=None):
+    products = []
+    
+    # 1. JSON (Config)
+    if os.path.exists("library.json"):
+        try:
+            with open("library.json", "r") as f:
+                js_prods = json.load(f)
+                for p in js_prods: p['source'] = '⚙️ Config'
+                products.extend(js_prods)
+        except: pass
+    
+    # 2. EXCEL LOCALE (Auto)
+    if os.path.exists("my_products.xlsx"):
+        try:
+            df_auto = pd.read_excel("my_products.xlsx")
+            products.extend(process_product_df(df_auto, "📂 Repo (Auto)"))
+        except Exception: pass
+
+    # 3. GOOGLE SHEETS
+    if "GOOGLE_SHEET_URL" in st.secrets:
+        try:
+            sheet_url = st.secrets["GOOGLE_SHEET_URL"]
+            df_gs = pd.read_csv(sheet_url)
+            products.extend(process_product_df(df_gs, "☁️ Google Sheets"))
+        except Exception: pass
+
+    # 4. UPLOAD MANUALE
+    if uploaded_lib_file:
+        df_manual = load_data_robust(uploaded_lib_file)
+        new_prods = process_product_df(df_manual, "👤 Upload")
+        existing_asins = [p['asin'] for p in products]
+        for p in new_prods:
+            if p['asin'] not in existing_asins:
+                products.append(p)
+    
+    return products
+
+# ==============================================================================
 # 4. MODULI APPLICAZIONE
 # ==============================================================================
 
 # --- LIBRERIA PRODOTTI ---
-def show_product_library():
-    st.title("📚 Libreria Prodotti")
+def show_product_library_view(lib_file):
+    st.title("📚 Libreria Prodotti Attiva")
     
+    # Carica la lista completa grezza
+    all_products = get_combined_library(lib_file)
+    
+    # Filtra in base ai permessi Admin
+    visible_products = []
     if st.session_state['is_admin']:
-        st.info("🔓 Modalità Admin Attiva")
-        
-        with st.expander("➕ Aggiungi/Modifica Prodotto", expanded=False):
-            c1, c2, c3 = st.columns([2, 2, 1])
-            new_brand = c1.text_input("Brand")
-            new_asin = c2.text_input("ASIN")
-            is_private = c3.checkbox("Privato", value=False)
-            new_name = st.text_input("Nome Prodotto (Alias)")
-            new_context = st.text_area("Contenuto Pagina Prodotto (Prompt AI)", height=150)
-            
-            if st.button("Salva in Sessione"):
-                if new_asin and new_name:
-                    st.session_state['temp_library'].append({
-                        "brand": new_brand, "asin": new_asin, "name": new_name,
-                        "context": new_context, "private": is_private
-                    })
-                    st.success(f"Prodotto aggiunto! Per renderlo permanente, copia il JSON nei Secrets.")
-                    st.rerun()
-                else: st.warning("ASIN e Nome obbligatori.")
-
-        full_library = load_product_library()
-        if full_library:
-            with st.expander("💾 Codice JSON per Secrets", expanded=True):
-                st.markdown("Copia questo codice nei Secrets assegnandolo a `PRODUCT_LIBRARY_JSON`.")
-                json_str = json.dumps(full_library, indent=2)
-                st.code(json_str, language='json')
-
-    st.divider()
-    st.subheader("Elenco Prodotti")
-    products = load_product_library()
-    
-    if not products:
-        st.info("La libreria è vuota.")
+        visible_products = all_products
     else:
-        all_brands = sorted(list(set([p['brand'] for p in products if p['brand']])))
+        # Se non è admin, mostra solo i prodotti NON privati
+        for p in all_products:
+            if not p.get('private', False):
+                visible_products.append(p)
+    
+    # Info fonti
+    sources = []
+    if os.path.exists("library.json"): sources.append("library.json")
+    if os.path.exists("my_products.xlsx"): sources.append("my_products.xlsx")
+    if "GOOGLE_SHEET_URL" in st.secrets: sources.append("Google Sheets")
+    if lib_file: sources.append("Upload Manuale")
+    
+    if sources: st.success(f"Fonti dati connesse: {', '.join(sources)}")
+    
+    if not visible_products:
+        st.info("Nessun prodotto disponibile.")
+        st.markdown("""
+        **Come creare il file Excel per la Libreria:**
+        1. Crea colonne: `Brand`, `ASIN`, `Nome`, `Contesto`, **`Privato`**.
+        2. Nella colonna `Privato` scrivi "Sì" per nascondere il prodotto agli ospiti.
+        3. Caricalo qui sotto o su GitHub come `my_products.xlsx`.
+        """)
+    else:
+        st.metric("Prodotti Visibili", len(visible_products))
+        
+        all_brands = sorted(list(set([p['brand'] for p in visible_products])))
         sel_brand = st.selectbox("Filtra per Brand", ["Tutti"] + all_brands)
-        filtered_prods = [p for p in products if sel_brand == "Tutti" or p['brand'] == sel_brand]
         
         display_data = []
-        for p in filtered_prods:
-            display_data.append({
-                "Brand": p['brand'], "ASIN": p['asin'], "Nome": p['name'],
-                "Visibilità": "🔒 Privato" if p.get('private') else "🌍 Pubblico"
-            })
+        for p in visible_products:
+            if sel_brand == "Tutti" or p['brand'] == sel_brand:
+                display_data.append({
+                    "Fonte": p.get('source', '?'),
+                    "Brand": p['brand'],
+                    "ASIN": p['asin'],
+                    "Nome": p['name'],
+                    "Visibilità": "🔒 Privato" if p.get('private') else "🌍 Pubblico"
+                })
         st.dataframe(pd.DataFrame(display_data), use_container_width=True)
 
-# --- HOME ---
-def show_home():
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        if os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
-        else: st.markdown("""<div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'><h1 style='color: white !important; margin: 0; font-size: 60px;'>S<span style='color: #FA7838;'>Z</span></h1></div>""", unsafe_allow_html=True)
-            
-    with col2:
-        st.title("Benvenuto in Saleszone")
-        st.markdown("### Il tuo spazio di crescita su Amazon.")
-        st.write("Questa suite operativa integra tutti gli strumenti necessari per l'analisi e l'ottimizzazione.")
-        products = load_product_library()
-        st.metric("Prodotti in Libreria", len(products))
-    
-    st.markdown("---")
-    c1, c2, c3 = st.columns(3)
-    with c1: st.info("🎯 **Missione**\n\nSupportare i brand con consulenza strategica.")
-    with c2: st.success("💎 **Valori**\n\nProfessionalità, Autenticità, Trasparenza.")
-    with c3: st.warning("🤝 **Metodo**\n\nNessun intermediario, solo risultati.")
-
 # --- PPC OPTIMIZER ---
-def show_ppc_optimizer():
+def show_ppc_optimizer(lib_file):
     st.title("📊 Saleszone Ads Optimizer")
-    with st.expander("ℹ️ Guida all'uso", expanded=False): st.markdown("**File richiesto:** Report Termini di Ricerca.")
+    with st.expander("ℹ️ Guida all'uso: PPC Optimizer", expanded=False):
+        st.markdown("**File richiesto:** Report Termini di Ricerca (Sponsored Products).")
 
     col1, col2 = st.columns(2)
     with col1: search_term_file = st.file_uploader("Report Search Term", type=["csv", "xlsx"])
     with col2: placement_file = st.file_uploader("Report Placement", type=["csv", "xlsx"])
 
     c1, c2, c3 = st.columns(3)
-    acos_target = c1.number_input("🎯 ACOS Target (%)", 30)
-    click_min = c2.number_input("⚠️ Click min (no vendite)", 10)
-    percent_threshold = c3.number_input("📊 % Spesa critica", 10)
+    acos_target = c1.number_input("🎯 ACOS Target (%)", min_value=1, value=30)
+    click_min = c2.number_input("⚠️ Click min (no vendite)", min_value=1, value=10)
+    percent_threshold = c3.number_input("📊 % Spesa critica", min_value=1, value=10)
 
     if search_term_file:
         df = load_data_robust(search_term_file)
@@ -365,7 +357,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI
+        # INTEGRAZIONE AI (GEMINI)
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -385,15 +377,27 @@ def show_ppc_optimizer():
             prod_ctx = ""
             
             if use_lib:
-                products = load_product_library()
-                if products:
-                    opts = [f"{p['brand']} - {p['name']} ({p['asin']})" for p in products]
+                # Carica la libreria (Comune + Personale)
+                all_products = get_combined_library(lib_file)
+                
+                # Filtra per Admin/Ospite
+                valid_products = []
+                if st.session_state['is_admin']:
+                    valid_products = all_products
+                else:
+                    valid_products = [p for p in all_products if not p.get('private', False)]
+                
+                if valid_products:
+                    opts = [f"{p['brand']} - {p['name']} ({p['asin']})" for p in valid_products]
                     sel_prod = st.selectbox("Scegli Prodotto", opts)
                     if sel_prod:
                         asin = sel_prod.split("(")[-1].replace(")", "")
-                        p_obj = next((p for p in products if p['asin'] == asin), None)
-                        if p_obj: prod_ctx = p_obj['context']
-                else: st.warning("Libreria vuota.")
+                        p_obj = next((p for p in valid_products if p['asin'] == asin), None)
+                        if p_obj: 
+                            prod_ctx = p_obj['context']
+                            with st.expander("Anteprima Contesto"):
+                                st.caption(prod_ctx[:200] + "...")
+                else: st.warning("Libreria vuota o nessun prodotto pubblico.")
             else:
                 prod_ctx = st.text_area("Incolla testo pagina prodotto:", height=100)
             
@@ -408,12 +412,36 @@ def show_ppc_optimizer():
                             prompt = f"""
                             Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
                             Termini: {', '.join(t_list)}
+                            
                             Contesto Prodotto: {prod_ctx}
-                            Task: Identifica Negative Exact. 3 gruppi (Incoerenti, Affini ma no ordini). Lista pulita.
+                            
+                            Task: Identifica quali termini mettere in 'Negative Exact'.
+                            Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
+                            Output: Lista pulita.
                             """
                             resp = model.generate_content(prompt)
                             st.markdown(resp.text)
                         except Exception as e: st.error(f"Errore AI: {e}")
+
+# --- HOME ---
+def show_home():
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
+        else: st.markdown("""<div style='background-color: #2940A8; padding: 30px; border-radius: 15px; text-align: center;'><h1 style='color: white !important; margin: 0; font-size: 60px;'>S<span style='color: #FA7838;'>Z</span></h1></div>""", unsafe_allow_html=True)
+            
+    with col2:
+        st.title("Benvenuto in Saleszone")
+        st.markdown("### Il tuo spazio di crescita su Amazon.")
+        st.write("Questa suite operativa integra tutti gli strumenti necessari per l'analisi e l'ottimizzazione.")
+        products = get_combined_library()
+        st.metric("Prodotti in Libreria", len(products))
+    
+    st.markdown("---")
+    c1, c2, c3 = st.columns(3)
+    with c1: st.info("🎯 **Missione**\n\nSupportare i brand con consulenza strategica.")
+    with c2: st.success("💎 **Valori**\n\nProfessionalità, Autenticità, Trasparenza.")
+    with c3: st.warning("🤝 **Metodo**\n\nNessun intermediario, solo risultati.")
 
 # --- BRAND ANALYTICS ---
 def show_brand_analytics():
@@ -424,11 +452,8 @@ def show_brand_analytics():
         df = load_data_robust(f)
         if df is None: return
         df = clean_columns(df)
-        
-        # Mappatura case-insensitive
         norm = lambda x: str(x).lower().strip().replace(" ", "_")
         cols = {norm(c): c for c in df.columns}
-        
         def pk(*a): 
             for x in a: 
                 if norm(x) in cols: return cols[norm(x)]
@@ -437,13 +462,13 @@ def show_brand_analytics():
         q = pk("Query di ricerca", "search_query", "Termine di ricerca")
         vol = pk("Volume query di ricerca", "search_query_volume")
         i_tot = pk("Impressioni: conteggio totale", "search_funnel_impressions_total")
-        i_br = pk("Impressioni: numero ASIN", "impressioni_numero_asin", "impressioni_conteggio_marchio")
+        i_br = pk("Impressioni: numero ASIN", "impressioni_numero_asin")
         c_tot = pk("Clic: conteggio totale", "search_funnel_clicks_total")
-        c_br = pk("Clic: numero di ASIN", "clic_numero_asin", "clic_conteggio_marchio")
+        c_br = pk("Clic: numero di ASIN", "clic_numero_asin")
         a_tot = pk("Aggiunte al carrello: conteggio totale", "search_funnel_add_to_carts_total")
-        a_br = pk("Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count", "aggiunte_al_carrello_conteggio_marchio")
+        a_br = pk("Aggiunte al carrello: numero ASIN", "search_funnel_add_to_carts_brand_asin_count")
         b_tot = pk("Acquisti: conteggio totale", "search_funnel_purchases_total")
-        b_br = pk("Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count", "acquisti_conteggio_marchio")
+        b_br = pk("Acquisti: numero ASIN", "search_funnel_purchases_brand_asin_count")
 
         if not q: 
             st.error("Colonne non trovate.")
@@ -482,20 +507,20 @@ def show_sqp():
                 if norm(x) in cols: return cols[norm(x)]
             return None
 
-        q = pk("Query di ricerca", "search_query", "termine_di_ricerca")
-        i_tot = pk("Impressioni_conteggio_totale", "impressions_total", "impressioni_conteggio_totale")
+        q = pk("Query di ricerca", "search_query")
+        i_tot = pk("Impressioni_conteggio_totale", "impressions_total")
+        c_tot = pk("Clic_conteggio_totale", "clicks_total")
+        b_tot = pk("Acquisti_conteggio_totale", "purchases_total")
         i_br = pk("Impressioni_conteggio_marchio", "impressions_brand")
-        c_tot = pk("Clic_conteggio_totale", "clicks_total", "clic_conteggio_totale")
-        c_br = pk("Clic_conteggio_marchio", "clicks_brand", "clic_conteggio_marchio")
-        b_tot = pk("Acquisti_conteggio_totale", "purchases_total", "acquisti_conteggio_totale")
-        b_br = pk("Acquisti_conteggio_marchio", "purchases_brand", "acquisti_conteggio_marchio")
+        c_br = pk("Clic_conteggio_marchio", "clicks_brand")
+        b_br = pk("Acquisti_conteggio_marchio", "purchases_brand")
 
         if not q: st.error("Colonne non trovate."); return
         def safe(c): return pd.to_numeric(df[c], errors='coerce').fillna(0) if c else 0
 
         df["CTR MARKET"] = safe(c_tot) / safe(i_tot).replace(0, 1)
-        df["CTR MARCHIO"] = safe(c_br) / safe(i_br).replace(0, 1)
         df["CR MARKET"] = safe(b_tot) / safe(c_tot).replace(0, 1)
+        df["CTR MARCHIO"] = safe(c_br) / safe(i_br).replace(0, 1)
         df["CR MARCHIO"] = safe(b_br) / safe(c_br).replace(0, 1)
         
         st.metric("CTR Medio Market", f"{df['CTR MARKET'].mean()*100:.2f}%")
@@ -513,7 +538,6 @@ def show_inventory():
         df = clean_columns(df)
         df.columns = df.columns.str.lower()
         
-        # Logica Delta
         if 'ending warehouse balance' in df.columns:
             inc = df[['receipts', 'customer returns', 'found']].sum(axis=1) if 'receipts' in df.columns else 0
             dec = df[['customer shipments', 'lost', 'damaged', 'disposed']].sum(axis=1).abs() if 'lost' in df.columns else 0
@@ -525,8 +549,7 @@ def show_inventory():
                 st.dataframe(anomalies)
                 download_excel({"Anomalie": anomalies}, "reclami.xlsx")
             else: st.success("Nessuna anomalia.")
-            
-        # Logica Damaged
+
         if 'damaged' in df.columns and 'transaction type' in df.columns:
              damaged_transfer = df[
                 (df['transaction type'].astype(str).str.lower().str.contains('adjustment')) & 
@@ -581,9 +604,6 @@ def show_invoices():
         if df is None: return
         df = clean_columns(df)
         
-        if 'TRANSACTION_TYPE' in df.columns:
-            df = df[df['TRANSACTION_TYPE'].astype(str).str.upper() == 'SALE']
-
         date_col = None
         for c in df.columns:
             if 'DATE' in c.upper() and 'COMPLETE' in c.upper(): date_col = c; break
@@ -619,6 +639,10 @@ def main():
             k = st.text_input("Gemini API Key", type="password")
             if k: st.session_state['gemini_api_key'] = k
         
+        # 📂 LIBRERIA PERSONALE (UPLOAD FILE)
+        st.markdown("### 📂 Libreria Personale")
+        uploaded_lib = st.file_uploader("Carica file Prodotti (Excel)", type=['xlsx', 'xls'], help="Carica il tuo file Excel con i prodotti privati.")
+        
         # ADMIN LOGIN
         with st.expander("Admin Area"):
             pwd = st.text_input("Password", type="password")
@@ -640,8 +664,8 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library()
-    elif sel == "PPC Optimizer": show_ppc_optimizer()
+    elif sel == "Libreria Prodotti": show_product_library_view(uploaded_lib)
+    elif sel == "PPC Optimizer": show_ppc_optimizer(uploaded_lib)
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
     elif sel == "Generazione Corrispettivi": show_invoices()
