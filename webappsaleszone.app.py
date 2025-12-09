@@ -110,7 +110,8 @@ def mask_sensitive_data(df):
     text_cols = df.select_dtypes(include=['object']).columns
     for col in text_cols:
         for secret_asin in hidden_list:
-            df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
+            if secret_asin:
+                df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
     return df
 
 def load_data_robust(file):
@@ -162,28 +163,30 @@ def process_product_df(df, source_label):
         col_name = next((c for c in df.columns if 'nome' in c or 'name' in c or 'prodotto' in c), None)
         col_brand = next((c for c in df.columns if 'brand' in c or 'marca' in c), None)
         col_context = next((c for c in df.columns if 'contesto' in c or 'context' in c or 'descri' in c or 'testo' in c), None)
+        col_private = next((c for c in df.columns if 'privato' in c or 'private' in c or 'riservato' in c), None)
         
         if col_asin and col_name:
             for _, row in df.iterrows():
+                is_private = False
+                if col_private:
+                    val = str(row[col_private]).strip().lower()
+                    if val in ['sì', 'si', 'yes', 'true', 'vero', '1']:
+                        is_private = True
+
                 products.append({
                     "brand": str(row[col_brand]) if col_brand else "Generico",
                     "asin": str(row[col_asin]).strip(),
                     "name": str(row[col_name]),
                     "context": str(row[col_context]) if col_context else "",
-                    "source": source_label
+                    "source": source_label,
+                    "private": is_private
                 })
     return products
 
 def get_combined_library():
-    """
-    Unisce:
-    1. library.json (File Config)
-    2. my_products.xlsx (File Excel nel repo - AUTO LOAD)
-    3. GOOGLE SHEETS (Secrets)
-    """
     products = []
     
-    # 1. Carica JSON (Configurazione Base)
+    # 1. JSON (Config)
     if os.path.exists("library.json"):
         try:
             with open("library.json", "r") as f:
@@ -192,7 +195,7 @@ def get_combined_library():
                 products.extend(js_prods)
         except: pass
     
-    # 2. AUTO-LOAD: Cerca 'my_products.xlsx' nel repository GitHub
+    # 2. EXCEL LOCALE (Auto)
     if os.path.exists("my_products.xlsx"):
         try:
             df_auto = pd.read_excel("my_products.xlsx")
@@ -228,30 +231,29 @@ def show_product_library_view():
     if files_found:
         st.success(f"Fonti dati connesse: {', '.join(files_found)}")
     
-    if not products:
-        st.info("Nessun prodotto disponibile.")
-        st.markdown("""
-        **Come attivare il caricamento automatico:**
-        1. Crea un file Excel con le colonne: `ASIN`, `Nome`, `Brand`, `Contesto`.
-        2. Chiamalo esattamente **`my_products.xlsx`**.
-        3. Caricalo nel tuo repository GitHub insieme a `app.py`.
-        4. L'app lo leggerà automaticamente ad ogni avvio!
-        """)
+    # Filtro visibilità
+    visible_products = []
+    if st.session_state['is_admin']:
+        visible_products = products
     else:
-        st.metric("Totale Prodotti", len(products))
-        
-        all_brands = sorted(list(set([p['brand'] for p in products])))
+        visible_products = [p for p in products if not p.get('private', False)]
+
+    if not visible_products:
+        st.info("Nessun prodotto disponibile.")
+    else:
+        st.metric("Prodotti Visibili", len(visible_products))
+        all_brands = sorted(list(set([p['brand'] for p in visible_products])))
         sel_brand = st.selectbox("Filtra per Brand", ["Tutti"] + all_brands)
         
         display_data = []
-        for p in products:
+        for p in visible_products:
             if sel_brand == "Tutti" or p['brand'] == sel_brand:
                 display_data.append({
                     "Fonte": p.get('source', '?'),
                     "Brand": p['brand'],
                     "ASIN": p['asin'],
                     "Nome": p['name'],
-                    "Contesto (Anteprima)": p.get('context', '')[:50] + "..."
+                    "Visibilità": "🔒 Privato" if p.get('private') else "🌍 Pubblico"
                 })
         st.dataframe(pd.DataFrame(display_data), use_container_width=True)
 
@@ -353,22 +355,16 @@ def show_ppc_optimizer():
             prod_ctx = ""
             
             if use_lib:
-                # Carica la libreria (Comune + Personale)
-                all_products = get_combined_library()
+                products = get_combined_library()
+                # Filtra prodotti visibili (se non admin, nascondi privati)
+                valid_prods = products if st.session_state['is_admin'] else [p for p in products if not p.get('private', False)]
                 
-                # Filtra per Admin/Ospite
-                valid_products = []
-                if st.session_state['is_admin']:
-                    valid_products = all_products
-                else:
-                    valid_products = [p for p in all_products if not p.get('private', False)]
-                
-                if valid_products:
-                    opts = [f"{p['brand']} - {p['name']} ({p['asin']})" for p in valid_products]
+                if valid_prods:
+                    opts = [f"{p['brand']} - {p['name']} ({p['asin']})" for p in valid_prods]
                     sel_prod = st.selectbox("Scegli Prodotto", opts)
                     if sel_prod:
                         asin = sel_prod.split("(")[-1].replace(")", "")
-                        p_obj = next((p for p in valid_products if p['asin'] == asin), None)
+                        p_obj = next((p for p in valid_prods if p['asin'] == asin), None)
                         if p_obj: 
                             prod_ctx = p_obj['context']
                             with st.expander("Anteprima Contesto"):
@@ -383,7 +379,8 @@ def show_ppc_optimizer():
                     with st.spinner("Analisi in corso..."):
                         try:
                             genai.configure(api_key=api_key)
-                            model = genai.GenerativeModel('gemini-pro')
+                            # FIX MODELLO
+                            model = genai.GenerativeModel('gemini-1.5-flash')
                             t_list = target_waste['Search Term'].head(150).tolist()
                             prompt = f"""
                             Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
@@ -647,3 +644,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
