@@ -343,7 +343,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) - FIXATA E ROBUSTA
+        # INTEGRAZIONE AI (GEMINI) - PROMPT AGGIORNATO E ANTI-ALLUCINAZIONE
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -388,36 +388,56 @@ def show_ppc_optimizer():
                             genai.configure(api_key=api_key)
                             
                             # --- SELEZIONE MODELLO DINAMICA ---
-                            # Interroga Google per trovare i modelli disponibili
-                            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                            candidate_models = [
+                                'gemini-1.5-flash',
+                                'gemini-1.5-flash-latest',
+                                'gemini-1.5-pro',
+                                'gemini-pro',
+                                'models/gemini-1.5-flash',
+                                'models/gemini-pro'
+                            ]
                             
-                            # Cerca un modello valido nella lista (preferendo Flash)
-                            model_name = next((m for m in available_models if 'flash' in m), None)
-                            if not model_name:
-                                model_name = next((m for m in available_models if 'pro' in m), None)
+                            model = None
+                            for m in candidate_models:
+                                try:
+                                    temp_model = genai.GenerativeModel(m)
+                                    temp_model.generate_content("test")
+                                    model = temp_model
+                                    break
+                                except: continue
                             
-                            if not model_name and available_models:
-                                model_name = available_models[0]
-                                
-                            if model_name:
-                                model = genai.GenerativeModel(model_name)
-                                t_list = target_waste['Search Term'].head(150).tolist()
-                                prompt = f"""
-                                Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
-                                Termini: {', '.join(t_list)}
-                                
-                                Contesto Prodotto: {prod_ctx}
-                                
-                                Task: Identifica quali termini mettere in 'Negative Exact'.
-                                Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
-                                Output: Lista pulita.
-                                """
-                                resp = model.generate_content(prompt)
-                                st.success(f"Analisi completata con modello: {model_name}")
-                                st.markdown(resp.text)
-                            else:
-                                st.error("Nessun modello di generazione testo trovato per la tua API Key.")
+                            if model is None:
+                                model = genai.GenerativeModel('gemini-pro')
 
+                            t_list = target_waste['Search Term'].head(150).tolist()
+                            
+                            # PROMPT RIGIDO E STRUTTURATO
+                            prompt = f"""
+                            Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
+                            NON INVENTARE O SUGGERIRE TERMINI NON PRESENTI NELLA LISTA.
+                            
+                            Termini da analizzare (Senza vendite):
+                            {', '.join(t_list)}
+                            
+                            Contesto Prodotto:
+                            {prod_ctx}
+                            
+                            Task: Identifica tra i termini forniti quali inserire in 'Corrispondenza Negativa Esatta'.
+                            
+                            Output richiesto in due parti:
+                            
+                            PARTE 1: Analisi
+                            Dividi i termini selezionati in 3 gruppi con breve motivazione:
+                            1. Completamente Incoerenti
+                            2. Incoerenti ma con affinità
+                            3. Affini ma senza conversioni
+                            
+                            PARTE 2: LISTA PRONTA PER COPIA-INCOLLA
+                            Scrivi SOLO l'elenco dei termini da negativizzare (quelli identificati sopra), uno per riga, senza elenchi puntati, senza parentesi, senza numeri, senza spiegazioni.
+                            Solo il testo nudo e crudo pronto per essere incollato in Seller Central.
+                            """
+                            resp = model.generate_content(prompt)
+                            st.markdown(resp.text)
                         except Exception as e: st.error(f"Errore AI: {e}")
 
 # --- HOME ---
@@ -642,7 +662,7 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
-                    st.rerun() # Reload per aggiornare stato
+                    st.rerun() 
                 else:
                     st.warning("Password errata ❌")
         
@@ -659,8 +679,8 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library_view() # Nessun argomento
-    elif sel == "PPC Optimizer": show_ppc_optimizer() # Nessun argomento
+    elif sel == "Libreria Prodotti": show_product_library_view() 
+    elif sel == "PPC Optimizer": show_ppc_optimizer()
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
     elif sel == "Generazione Corrispettivi": show_invoices()
