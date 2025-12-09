@@ -85,6 +85,14 @@ def inject_custom_css():
             background-color: #f0fdf4;
             color: #15803d;
         }
+        .stError {
+            background-color: #fef2f2;
+            color: #b91c1c;
+        }
+        .stWarning {
+            background-color: #fffbeb;
+            color: #b45309;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -184,12 +192,6 @@ def process_product_df(df, source_label):
     return products
 
 def get_combined_library():
-    """
-    Unisce:
-    1. library.json (File Config)
-    2. my_products.xlsx (File Excel nel repo - AUTO LOAD)
-    3. GOOGLE SHEETS (Secrets)
-    """
     products = []
     
     # 1. JSON (Config)
@@ -341,7 +343,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) - CON LOOP DI MODELLI
+        # INTEGRAZIONE AI (GEMINI) ROBUSTA
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -388,11 +390,12 @@ def show_ppc_optimizer():
                             # TENTA DIVERSI MODELLI IN ORDINE DI PREFERENZA
                             model = None
                             candidate_models = [
-                                'gemini-1.5-flash',
                                 'gemini-1.5-flash-latest',
+                                'gemini-1.5-flash',
                                 'gemini-1.5-pro',
                                 'gemini-pro',
                                 'models/gemini-1.5-flash',
+                                'models/gemini-1.5-pro',
                                 'models/gemini-pro'
                             ]
 
@@ -645,7 +648,7 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
-                    st.rerun() # Reload per aggiornare stato
+                    st.rerun()
                 else:
                     st.warning("Password errata ❌")
         
@@ -662,7 +665,7 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library_view()
+    elif sel == "Libreria Prodotti": show_product_library_view(None) 
     elif sel == "PPC Optimizer": show_ppc_optimizer()
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
