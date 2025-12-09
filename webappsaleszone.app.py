@@ -85,14 +85,6 @@ def inject_custom_css():
             background-color: #f0fdf4;
             color: #15803d;
         }
-        .stError {
-            background-color: #fef2f2;
-            color: #b91c1c;
-        }
-        .stWarning {
-            background-color: #fffbeb;
-            color: #b45309;
-        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -192,6 +184,12 @@ def process_product_df(df, source_label):
     return products
 
 def get_combined_library():
+    """
+    Unisce:
+    1. library.json (File Config)
+    2. my_products.xlsx (File Excel nel repo - AUTO LOAD)
+    3. GOOGLE SHEETS (Secrets)
+    """
     products = []
     
     # 1. JSON (Config)
@@ -277,7 +275,6 @@ def show_ppc_optimizer():
 
     c1, c2, c3 = st.columns(3)
     acos_target = c1.number_input("🎯 ACOS Target (%)", min_value=1, value=30)
-    # FIX: Min value a 1 per permettere di scendere sotto 10
     click_min = c2.number_input("⚠️ Click min (no vendite)", min_value=1, value=10)
     percent_threshold = c3.number_input("📊 % Spesa critica", min_value=1, value=10)
 
@@ -344,7 +341,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) ROBUSTA
+        # INTEGRAZIONE AI (GEMINI) - CON LOOP DI MODELLI
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -388,42 +385,43 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # --- LOGICA ROBUSTA SELEZIONE MODELLO ---
-                            # Tenta di trovare un modello funzionante iterando sui nomi comuni
-                            active_model = None
-                            # Ordine di tentativi: 1.5 Flash (veloce), 1.5 Pro (potente), Pro Legacy
-                            candidate_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro", "gemini-pro"]
-                            
+                            # TENTA DIVERSI MODELLI IN ORDINE DI PREFERENZA
+                            model = None
+                            candidate_models = [
+                                'gemini-1.5-flash',
+                                'gemini-1.5-flash-latest',
+                                'gemini-1.5-pro',
+                                'gemini-pro',
+                                'models/gemini-1.5-flash',
+                                'models/gemini-pro'
+                            ]
+
                             for m_name in candidate_models:
                                 try:
                                     temp_model = genai.GenerativeModel(m_name)
-                                    # Test rapido di connessione (non consuma token significativi)
-                                    # Nota: Alcuni account potrebbero non avere accesso a list_models, quindi proviamo direttamente
-                                    active_model = temp_model
-                                    break 
-                                except:
-                                    continue
+                                    temp_model.generate_content("test")
+                                    model = temp_model
+                                    break
+                                except: continue
                             
-                            if not active_model:
-                                # Fallback estremo
-                                active_model = genai.GenerativeModel('gemini-pro')
+                            if model is None:
+                                st.error("Nessun modello Gemini compatibile trovato. Verifica la tua API Key su Google AI Studio.")
+                            else:
+                                t_list = target_waste['Search Term'].head(150).tolist()
+                                prompt = f"""
+                                Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
+                                Termini: {', '.join(t_list)}
+                                
+                                Contesto Prodotto: {prod_ctx}
+                                
+                                Task: Identifica quali termini mettere in 'Negative Exact'.
+                                Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
+                                Output: Lista pulita.
+                                """
+                                resp = model.generate_content(prompt)
+                                st.markdown(resp.text)
 
-                            t_list = target_waste['Search Term'].head(150).tolist()
-                            prompt = f"""
-                            Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
-                            Termini: {', '.join(t_list)}
-                            
-                            Contesto Prodotto: {prod_ctx}
-                            
-                            Task: Identifica quali termini mettere in 'Negative Exact'.
-                            Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
-                            Output: Lista pulita.
-                            """
-                            resp = active_model.generate_content(prompt)
-                            st.markdown(resp.text)
-                        except Exception as e: 
-                            st.error(f"Errore AI: {e}")
-                            st.info("Consiglio: Controlla che la tua API Key abbia i permessi per 'Gemini API' su Google AI Studio.")
+                        except Exception as e: st.error(f"Errore AI: {e}")
 
 # --- HOME ---
 def show_home():
@@ -647,13 +645,13 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
-                    st.success("Login effettuato con successo! ✅")
                     st.rerun() # Reload per aggiornare stato
                 else:
                     st.warning("Password errata ❌")
         
-        # Feedback Logout
+        # Feedback Login
         if st.session_state.get('is_admin'):
+            st.success("Login effettuato con successo! ✅")
             if st.button("Logout"): 
                 st.session_state['is_admin'] = False
                 st.rerun()
