@@ -192,7 +192,6 @@ def process_product_df(df, source_label):
     return products
 
 def get_combined_library():
-    """Unisce tutte le fonti della libreria (JSON, Excel, Google Sheets)."""
     products = []
     
     # 1. JSON (Config)
@@ -229,8 +228,7 @@ def get_combined_library():
 def show_product_library_view():
     st.title("📚 Libreria Prodotti Attiva")
     
-    # Carica la lista completa grezza
-    all_products = get_combined_library()
+    products = get_combined_library()
     
     # Info file
     files_found = []
@@ -244,9 +242,9 @@ def show_product_library_view():
     # Filtro visibilità
     visible_products = []
     if st.session_state['is_admin']:
-        visible_products = all_products
+        visible_products = products
     else:
-        visible_products = [p for p in all_products if not p.get('private', False)]
+        visible_products = [p for p in products if not p.get('private', False)]
 
     if not visible_products:
         st.info("Nessun prodotto disponibile.")
@@ -345,7 +343,7 @@ def show_ppc_optimizer():
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
 
-        # INTEGRAZIONE AI (GEMINI) - FIXATA
+        # INTEGRAZIONE AI (GEMINI) - FIXATA E ROBUSTA
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -389,41 +387,37 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # --- SELEZIONE MODELLO AUTOMATICA (FIX) ---
-                            candidate_models = [
-                                'gemini-1.5-flash',
-                                'gemini-1.5-flash-latest',
-                                'gemini-1.5-pro',
-                                'gemini-pro',
-                                'models/gemini-1.5-flash',
-                                'models/gemini-pro'
-                            ]
+                            # --- SELEZIONE MODELLO DINAMICA ---
+                            # Interroga Google per trovare i modelli disponibili
+                            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                             
-                            model = None
-                            for m in candidate_models:
-                                try:
-                                    temp_model = genai.GenerativeModel(m)
-                                    temp_model.generate_content("test")
-                                    model = temp_model
-                                    break
-                                except: continue
+                            # Cerca un modello valido nella lista (preferendo Flash)
+                            model_name = next((m for m in available_models if 'flash' in m), None)
+                            if not model_name:
+                                model_name = next((m for m in available_models if 'pro' in m), None)
+                            
+                            if not model_name and available_models:
+                                model_name = available_models[0]
                                 
-                            if model is None:
-                                model = genai.GenerativeModel('gemini-pro')
+                            if model_name:
+                                model = genai.GenerativeModel(model_name)
+                                t_list = target_waste['Search Term'].head(150).tolist()
+                                prompt = f"""
+                                Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
+                                Termini: {', '.join(t_list)}
+                                
+                                Contesto Prodotto: {prod_ctx}
+                                
+                                Task: Identifica quali termini mettere in 'Negative Exact'.
+                                Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
+                                Output: Lista pulita.
+                                """
+                                resp = model.generate_content(prompt)
+                                st.success(f"Analisi completata con modello: {model_name}")
+                                st.markdown(resp.text)
+                            else:
+                                st.error("Nessun modello di generazione testo trovato per la tua API Key.")
 
-                            t_list = target_waste['Search Term'].head(150).tolist()
-                            prompt = f"""
-                            Analizza i seguenti termini (Senza vendite) per la campagna '{sel_camp_ai}'.
-                            Termini: {', '.join(t_list)}
-                            
-                            Contesto Prodotto: {prod_ctx}
-                            
-                            Task: Identifica quali termini mettere in 'Negative Exact'.
-                            Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
-                            Output: Lista pulita.
-                            """
-                            resp = model.generate_content(prompt)
-                            st.markdown(resp.text)
                         except Exception as e: st.error(f"Errore AI: {e}")
 
 # --- HOME ---
@@ -648,7 +642,6 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
-                    st.success("Login effettuato con successo! ✅")
                     st.rerun() # Reload per aggiornare stato
                 else:
                     st.warning("Password errata ❌")
