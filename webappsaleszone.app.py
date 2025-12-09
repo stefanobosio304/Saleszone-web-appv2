@@ -85,6 +85,14 @@ def inject_custom_css():
             background-color: #f0fdf4;
             color: #15803d;
         }
+        .stError {
+            background-color: #fef2f2;
+            color: #b91c1c;
+        }
+        .stWarning {
+            background-color: #fffbeb;
+            color: #b45309;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -110,7 +118,8 @@ def mask_sensitive_data(df):
     text_cols = df.select_dtypes(include=['object']).columns
     for col in text_cols:
         for secret_asin in hidden_list:
-            df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
+            if secret_asin:
+                df[col] = df[col].astype(str).str.replace(secret_asin, "******", case=False, regex=False)
     return df
 
 def load_data_robust(file):
@@ -151,7 +160,7 @@ def download_excel(dfs_dict, filename):
     except Exception as e: st.error(f"Errore download: {e}")
 
 # ==============================================================================
-# GESTIONE LIBRERIA AVANZATA
+# GESTIONE LIBRERIA AVANZATA (AUTO-LOAD)
 # ==============================================================================
 def process_product_df(df, source_label):
     """Converte un DataFrame prodotti in una lista di dizionari standard."""
@@ -268,6 +277,7 @@ def show_ppc_optimizer():
 
     c1, c2, c3 = st.columns(3)
     acos_target = c1.number_input("🎯 ACOS Target (%)", min_value=1, value=30)
+    # FIX: Min value a 1 per permettere di scendere sotto 10
     click_min = c2.number_input("⚠️ Click min (no vendite)", min_value=1, value=10)
     percent_threshold = c3.number_input("📊 % Spesa critica", min_value=1, value=10)
 
@@ -355,7 +365,6 @@ def show_ppc_optimizer():
             
             if use_lib:
                 products = get_combined_library()
-                # Filtra per privacy
                 valid_prods = products if st.session_state['is_admin'] else [p for p in products if not p.get('private', False)]
                 
                 if valid_prods:
@@ -379,14 +388,25 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # LOGICA INTELLIGENTE DI SELEZIONE MODELLO
-                            # Prova a listare i modelli disponibili e ne sceglie uno funzionante
-                            try:
-                                # Tentativo con modello standard di base
-                                model = genai.GenerativeModel('gemini-1.5-flash')
-                            except:
-                                # Fallback generico
-                                model = genai.GenerativeModel('gemini-pro')
+                            # --- LOGICA ROBUSTA SELEZIONE MODELLO ---
+                            # Tenta di trovare un modello funzionante iterando sui nomi comuni
+                            active_model = None
+                            # Ordine di tentativi: 1.5 Flash (veloce), 1.5 Pro (potente), Pro Legacy
+                            candidate_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro", "gemini-pro"]
+                            
+                            for m_name in candidate_models:
+                                try:
+                                    temp_model = genai.GenerativeModel(m_name)
+                                    # Test rapido di connessione (non consuma token significativi)
+                                    # Nota: Alcuni account potrebbero non avere accesso a list_models, quindi proviamo direttamente
+                                    active_model = temp_model
+                                    break 
+                                except:
+                                    continue
+                            
+                            if not active_model:
+                                # Fallback estremo
+                                active_model = genai.GenerativeModel('gemini-pro')
 
                             t_list = target_waste['Search Term'].head(150).tolist()
                             prompt = f"""
@@ -399,11 +419,11 @@ def show_ppc_optimizer():
                             Dividili in 3 gruppi: 1. Completamente Incoerenti, 2. Incoerenti ma con affinità, 3. Affini ma non performanti.
                             Output: Lista pulita.
                             """
-                            resp = model.generate_content(prompt)
+                            resp = active_model.generate_content(prompt)
                             st.markdown(resp.text)
                         except Exception as e: 
                             st.error(f"Errore AI: {e}")
-                            st.error("Suggerimento: Verifica su Google AI Studio quale modello è attivo per la tua API Key.")
+                            st.info("Consiglio: Controlla che la tua API Key abbia i permessi per 'Gemini API' su Google AI Studio.")
 
 # --- HOME ---
 def show_home():
@@ -627,13 +647,13 @@ def main():
             if st.button("Login"):
                 if "ADMIN_PASSWORD" in st.secrets and pwd == st.secrets["ADMIN_PASSWORD"]:
                     st.session_state['is_admin'] = True
+                    st.success("Login effettuato con successo! ✅")
                     st.rerun() # Reload per aggiornare stato
                 else:
                     st.warning("Password errata ❌")
         
-        # Feedback Login
+        # Feedback Logout
         if st.session_state.get('is_admin'):
-            st.success("Login effettuato con successo! ✅")
             if st.button("Logout"): 
                 st.session_state['is_admin'] = False
                 st.rerun()
@@ -644,7 +664,7 @@ def main():
         st.caption("© 2025 Saleszone Agency")
 
     if sel == "Home": show_home()
-    elif sel == "Libreria Prodotti": show_product_library_view(None) # File manuale rimosso
+    elif sel == "Libreria Prodotti": show_product_library_view()
     elif sel == "PPC Optimizer": show_ppc_optimizer()
     elif sel == "Brand Analytics Insights": show_brand_analytics()
     elif sel == "SQP Analysis": show_sqp()
