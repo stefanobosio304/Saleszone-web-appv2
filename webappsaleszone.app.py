@@ -396,32 +396,38 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # --- SELEZIONE MODELLO AGGIORNATA CON I TUOI MODELLI ESATTI ---
+                            # --- SELEZIONE MODELLO AGGIORNATA ---
+                            # Basata sulla lista reale che hai fornito:
+                            # models/gemini-2.5-flash
+                            # models/gemini-flash-latest
+                            # models/gemini-2.0-flash
+                            # models/gemini-1.5-pro (se disponibile, ma priorità ai flash)
+                            
                             candidate_models = [
-                                'models/gemini-2.5-flash',       # Priorità assoluta (nuovo)
-                                'models/gemini-flash-latest',    # Molto comune
-                                'models/gemini-2.0-flash',       # Recente
-                                'models/gemini-1.5-flash',
-                                'models/gemini-1.5-pro',
-                                'gemini-1.5-flash',
-                                'gemini-1.5-pro'
+                                'models/gemini-2.5-flash',
+                                'models/gemini-flash-latest',
+                                'models/gemini-2.0-flash',
+                                'models/gemini-2.5-pro',
+                                'models/gemini-2.0-pro-exp'
                             ]
                             
                             model = None
+                            last_exception = None
+                            
                             for m in candidate_models:
                                 try:
                                     temp_model = genai.GenerativeModel(m)
+                                    # Test rapido di connessione
                                     temp_model.generate_content("test")
                                     model = temp_model
                                     break
-                                except: continue
+                                except Exception as e:
+                                    last_exception = e
+                                    continue
                             
                             if model is None:
-                                # Fallback estremo
-                                try: model = genai.GenerativeModel('gemini-pro')
-                                except: pass
-
-                            if model:
+                                st.error(f"Impossibile connettersi ai modelli Gemini 2.0/2.5. Ultimo errore: {last_exception}")
+                            else:
                                 t_list = target_waste['Search Term'].head(150).tolist()
                                 prompt = f"""
                                 Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
@@ -458,8 +464,6 @@ def show_ppc_optimizer():
                                 """
                                 resp = model.generate_content(prompt)
                                 st.markdown(resp.text)
-                            else:
-                                st.error("Errore: Nessun modello Gemini compatibile trovato. Verifica la tua API Key.")
 
                         except Exception as e: st.error(f"Errore AI: {e}")
 
