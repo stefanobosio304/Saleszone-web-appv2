@@ -352,7 +352,7 @@ def show_ppc_optimizer():
             mime='text/csv'
         )
 
-        # INTEGRAZIONE AI (GEMINI) - FIXATA E ROBUSTA
+        # INTEGRAZIONE AI (GEMINI) - AUTO DISCOVERY MODELLO
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -396,38 +396,41 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # --- SELEZIONE MODELLO AGGIORNATA ---
-                            # Basata sulla lista reale che hai fornito:
-                            # models/gemini-2.5-flash
-                            # models/gemini-flash-latest
-                            # models/gemini-2.0-flash
-                            # models/gemini-1.5-pro (se disponibile, ma priorità ai flash)
-                            
-                            candidate_models = [
-                                'models/gemini-2.5-flash',
-                                'models/gemini-flash-latest',
-                                'models/gemini-2.0-flash',
-                                'models/gemini-2.5-pro',
-                                'models/gemini-2.0-pro-exp'
-                            ]
-                            
-                            model = None
-                            last_exception = None
-                            
-                            for m in candidate_models:
+                            active_model = None
+                            last_error = None
+
+                            # 1. Tenta di ottenere la lista reale dei modelli disponibili
+                            # Questo evita di "indovinare" nomi che non esistono
+                            try:
+                                all_models = [m for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                                # Ordina per preferenza: Flash > Pro
+                                def model_priority(m):
+                                    name = m.name.lower()
+                                    score = 0
+                                    if 'flash' in name: score += 10
+                                    if 'latest' in name: score += 5
+                                    if '1.5' in name: score += 2
+                                    return score
+                                
+                                all_models.sort(key=model_priority, reverse=True)
+                                candidate_names = [m.name for m in all_models]
+                            except Exception as e:
+                                # Se list_models fallisce, usa una lista sicura di fallback senza versioni sperimentali
+                                candidate_names = ["gemini-1.5-flash", "gemini-1.5-pro", "models/gemini-1.5-flash"]
+                                last_error = e
+
+                            # 2. Testa i modelli finché uno non risponde
+                            for m_name in candidate_names:
                                 try:
-                                    temp_model = genai.GenerativeModel(m)
-                                    # Test rapido di connessione
-                                    temp_model.generate_content("test")
-                                    model = temp_model
+                                    model = genai.GenerativeModel(m_name)
+                                    model.generate_content("test")
+                                    active_model = model
                                     break
                                 except Exception as e:
-                                    last_exception = e
+                                    last_error = e
                                     continue
                             
-                            if model is None:
-                                st.error(f"Impossibile connettersi ai modelli Gemini 2.0/2.5. Ultimo errore: {last_exception}")
-                            else:
+                            if active_model:
                                 t_list = target_waste['Search Term'].head(150).tolist()
                                 prompt = f"""
                                 Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
@@ -440,15 +443,15 @@ def show_ppc_optimizer():
                                 {prod_ctx}
                                 
                                 Task: Identifica tra i termini forniti quali inserire in 'Corrispondenza Negativa Esatta'.
-                                SEPARARE GLI ASIN (termini che iniziano con B0) in un gruppo a parte.
+                                SEPARARE GLI ASIN (termini che iniziano con B0 o b0) in un gruppo a parte.
                                 
                                 OUTPUT RICHIESTO IN DUE PARTI:
                                 
                                 --- PARTE 1: ANALISI ---
-                                Spiega brevemente le scelte.
+                                Spiega brevemente le scelte per i gruppi.
                                 
                                 --- PARTE 2: LISTA PRONTA PER COPIA-INCOLLA ---
-                                Scrivi SOLO i termini, uno per riga, senza elenchi puntati, senza numeri.
+                                Scrivi SOLO i termini, uno per riga, senza elenchi puntati, senza numeri, senza parentesi.
                                 
                                 **GRUPPO 1: ASIN**
                                 (Solo codici ASIN trovati nella lista)
@@ -462,8 +465,10 @@ def show_ppc_optimizer():
                                 **GRUPPO 4: AFFINI MA SENZA CONVERSIONI**
                                 (Solo termini uno per riga)
                                 """
-                                resp = model.generate_content(prompt)
+                                resp = active_model.generate_content(prompt)
                                 st.markdown(resp.text)
+                            else:
+                                st.error(f"Impossibile trovare un modello funzionante. Assicurati che l'API Key sia valida. Ultimo errore: {last_error}")
 
                         except Exception as e: st.error(f"Errore AI: {e}")
 
