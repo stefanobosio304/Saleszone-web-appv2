@@ -342,8 +342,17 @@ def show_ppc_optimizer():
         df_terms = df[df['Campaign'] == sel_camp] if sel_camp != "Tutte" else df
         waste_terms = df_terms[(df_terms['Sales'] == 0) & (df_terms['Clicks'] >= click_min)].sort_values(by='Spend', ascending=False)
         st.dataframe(waste_terms[['Campaign', 'Search Term', 'Clicks', 'Spend']].style.format({'Spend': '€{:.2f}'}), use_container_width=True)
+        
+        # AGGIUNTO DOWNLOAD BUTTON CSV
+        csv_data = waste_terms.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Scarica Report Filtrato (CSV)",
+            data=csv_data,
+            file_name=f"search_terms_filtered_{datetime.date.today()}.csv",
+            mime='text/csv'
+        )
 
-        # INTEGRAZIONE AI (GEMINI) - PROMPT PULITO E SEPARAZIONE ASIN
+        # INTEGRAZIONE AI (GEMINI) - FIXATA E ROBUSTA
         st.markdown("---")
         st.subheader("🤖 Analisi AI (Gemini)")
         
@@ -387,13 +396,17 @@ def show_ppc_optimizer():
                         try:
                             genai.configure(api_key=api_key)
                             
-                            # SELEZIONE MODELLO DINAMICA
+                            # --- SELEZIONE MODELLO AGGIORNATA CON I TUOI MODELLI ESATTI ---
                             candidate_models = [
-                                'gemini-1.5-flash-latest', 'gemini-1.5-flash', 
-                                'gemini-1.5-pro', 'gemini-pro',
+                                'models/gemini-2.5-flash',       # Priorità assoluta (nuovo)
+                                'models/gemini-flash-latest',    # Molto comune
+                                'models/gemini-2.0-flash',       # Recente
                                 'models/gemini-1.5-flash',
-                                'models/gemini-pro'
+                                'models/gemini-1.5-pro',
+                                'gemini-1.5-flash',
+                                'gemini-1.5-pro'
                             ]
+                            
                             model = None
                             for m in candidate_models:
                                 try:
@@ -403,49 +416,51 @@ def show_ppc_optimizer():
                                     break
                                 except: continue
                             
-                            if model is None: model = genai.GenerativeModel('gemini-pro')
+                            if model is None:
+                                # Fallback estremo
+                                try: model = genai.GenerativeModel('gemini-pro')
+                                except: pass
 
-                            t_list = target_waste['Search Term'].head(150).tolist()
-                            
-                            # PROMPT RIGIDISSIMO PER OUTPUT PULITO E ASIN SEPARATI
-                            prompt = f"""
-                            Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
-                            NON INVENTARE O SUGGERIRE TERMINI NON PRESENTI NELLA LISTA.
-                            
-                            Termini da analizzare (Senza vendite):
-                            {', '.join(t_list)}
-                            
-                            Contesto Prodotto:
-                            {prod_ctx}
-                            
-                            Task: Identifica tra i termini forniti quali inserire in 'Corrispondenza Negativa Esatta'.
-                            
-                            **ISTRUZIONI DI FORMATTAZIONE:**
-                            Per la sezione "LISTA PRONTA PER COPIA-INCOLLA", restituisci SOLO i termini.
-                            NIENTE numeri, NIENTE punti elenco, NIENTE parentesi, NIENTE spiegazioni.
-                            UNO PER RIGA.
-                            
-                            OUTPUT RICHIESTO IN DUE PARTI:
-                            
-                            --- PARTE 1: ANALISI ---
-                            Spiega brevemente perché hai scelto questi gruppi.
-                            
-                            --- PARTE 2: LISTA PRONTA PER COPIA-INCOLLA ---
-                            
-                            **GRUPPO 1: ASIN**
-                            (Incolla qui sotto solo i codici ASIN trovati nella lista input, quelli che iniziano con b0 o B0)
-                            
-                            **GRUPPO 2: COMPLETAMENTE INCOERENTI**
-                            (Incolla qui sotto i termini incoerenti, uno per riga, testo puro)
-                            
-                            **GRUPPO 3: INCOERENTI MA CON AFFINITÀ**
-                            (Incolla qui sotto i termini di questo gruppo, uno per riga, testo puro)
-                            
-                            **GRUPPO 4: AFFINI MA SENZA CONVERSIONI**
-                            (Incolla qui sotto i termini di questo gruppo, uno per riga, testo puro)
-                            """
-                            resp = model.generate_content(prompt)
-                            st.markdown(resp.text)
+                            if model:
+                                t_list = target_waste['Search Term'].head(150).tolist()
+                                prompt = f"""
+                                Sei un esperto Amazon PPC. Analizza ESCLUSIVAMENTE la lista dei 'Termini' fornita qui sotto.
+                                NON INVENTARE O SUGGERIRE TERMINI NON PRESENTI NELLA LISTA.
+                                
+                                Termini da analizzare (Senza vendite):
+                                {', '.join(t_list)}
+                                
+                                Contesto Prodotto:
+                                {prod_ctx}
+                                
+                                Task: Identifica tra i termini forniti quali inserire in 'Corrispondenza Negativa Esatta'.
+                                SEPARARE GLI ASIN (termini che iniziano con B0) in un gruppo a parte.
+                                
+                                OUTPUT RICHIESTO IN DUE PARTI:
+                                
+                                --- PARTE 1: ANALISI ---
+                                Spiega brevemente le scelte.
+                                
+                                --- PARTE 2: LISTA PRONTA PER COPIA-INCOLLA ---
+                                Scrivi SOLO i termini, uno per riga, senza elenchi puntati, senza numeri.
+                                
+                                **GRUPPO 1: ASIN**
+                                (Solo codici ASIN trovati nella lista)
+                                
+                                **GRUPPO 2: COMPLETAMENTE INCOERENTI**
+                                (Solo termini uno per riga)
+                                
+                                **GRUPPO 3: INCOERENTI MA CON AFFINITÀ**
+                                (Solo termini uno per riga)
+                                
+                                **GRUPPO 4: AFFINI MA SENZA CONVERSIONI**
+                                (Solo termini uno per riga)
+                                """
+                                resp = model.generate_content(prompt)
+                                st.markdown(resp.text)
+                            else:
+                                st.error("Errore: Nessun modello Gemini compatibile trovato. Verifica la tua API Key.")
+
                         except Exception as e: st.error(f"Errore AI: {e}")
 
 # --- HOME ---
